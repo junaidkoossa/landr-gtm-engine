@@ -1,0 +1,6 @@
+.env
+.venv/
+.DS_Store
+__pycache__/
+data/input_creators.local.csv
+data/enriched_creators.csv
