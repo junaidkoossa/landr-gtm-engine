@@ -1,0 +1,43 @@
+"""Pipeline settings that apply to every vertical."""
+
+# Scoring models: live runs score a few creators at a time; batch runs are bulk.
+LIVE_MODEL = "claude-sonnet-5-5"
+BATCH_MODEL = "claude-sonnet-5-5"
+
+# In "auto" scoring mode, runs scoring at least this many creators use the Batch API.
+BATCH_THRESHOLD = 20
+# A batch is submitted every time this many creators have evidence collected.
+BATCH_SIZE = 500
+BATCH_POLL_SECONDS = 60
+
+# Creators scored longer ago than this are collected and scored again.
+RESCORE_AFTER_DAYS = 90
+# A creator that fails this many runs in a row is skipped until removed from the failures file.
+MAX_ATTEMPTS = 3
+
+# Pages of releases read per label (100 releases a page, about 1 second each) and of
+# uploads per channel (50 a page, so up to 500 uploads in the last year).
+MAX_RELEASE_PAGES = 50
+MAX_UPLOAD_PAGES = 10
+# Discogs only lists release years; the exact dates of this many of a label's newest
+# releases are read one by one (about 1 second each) to place them in the last 12 months.
+DISCOGS_DATED_RELEASES = 20
+
+# Releases younger than this are counted as releases but left out of view figures,
+# because they haven't had time to collect views.
+VIEW_MATURITY_DAYS = 14
+
+# Instagram Business Discovery (Graph API).
+GRAPH_API_VERSION = "v25.0"
+INSTAGRAM_MEDIA_LIMIT = 50  # posts per call
+INSTAGRAM_MAX_PAGES = 4  # up to 200 posts, stopping once posts are over a year old
+# Business Discovery calls count against your token's limit, about 200 an hour.
+INSTAGRAM_CALLS_PER_HOUR = 190
+
+# TikTok through Bright Data. Every TikTok profile is looked up (1 record each); the
+# recent posts (about TIKTOK_POSTS_PER_PROFILE records each) are only collected for
+# profiles with at least TIKTOK_POSTS_MIN_FOLLOWERS followers, to stay in the free tier.
+TIKTOK_POSTS_MIN_FOLLOWERS = 10_000
+TIKTOK_POSTS_PER_PROFILE = 30
+BRIGHTDATA_POLL_SECONDS = 15
+BRIGHTDATA_MAX_WAIT_SECONDS = 3600
