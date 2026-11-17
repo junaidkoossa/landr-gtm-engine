@@ -16,6 +16,7 @@ from src.enricher import (
     batch_results,
     build_request,
     enrich_creator,
+    scoring_provider,
     submit_batch,
     wait_for_batch,
 )
@@ -112,7 +113,7 @@ def review_reasons(record: dict[str, object]) -> list[str]:
 class Run:
     """One pipeline run: what has been scored, what failed, and the files that record it."""
 
-    def __init__(self, output_path, rules, client, poll_seconds):
+    def __init__(self, output_path, rules, client, poll_seconds, provider="claude"):
         self.files = run_files(output_path)
         self.store = CreatorStore(output_path)
         self.failures = FailureLog(self.files["failures"], MAX_ATTEMPTS)
@@ -120,6 +121,7 @@ class Run:
         self.pending = PendingBatches(self.files["pending"])
         self.rules = rules
         self.client = client
+        self.provider = provider
         self.poll_seconds = poll_seconds
         self.scored: list[dict[str, object]] = []
         self.failed = 0
@@ -189,7 +191,7 @@ class Run:
     def score_live(self, record: dict[str, object]) -> None:
         creator = {field: record.get(field, "") for field in CREATOR_FIELDS}
         try:
-            enrichment = enrich_creator(creator, record, self.rules, self.client)
+            enrichment = enrich_creator(creator, record, self.rules, self.client, self.provider)
         except FATAL_API_ERRORS:
             # Every later creator would fail the same way, so stop instead of skipping.
             raise
@@ -281,6 +283,7 @@ def run_pipeline(
     poll_seconds: float = BATCH_POLL_SECONDS,
     hubspot: str | None = None,
     rescore_all: bool = False,
+    provider: str | None = None,
 ) -> list[dict[str, object]]:
     """Score new and stale creators, keep the output CSV up to date, and return this run's rows.
 
@@ -288,16 +291,28 @@ def run_pipeline(
     (used once to move older rows onto a new scoring scale)."""
     creators = load_creators(input_path)
     rules = load_vertical_rules(rules_path)
-    if client is None:
+    provider = scoring_provider(provider)
+    if provider == "gemini":
+        # Gemini is for small test runs: always live, never the Batch API.
+        from src.gemini import has_api_key
+
+        if not has_api_key():
+            raise RuntimeError("Set GEMINI_API_KEY to score with Gemini")
+        if scoring != "live":
+            logger.info("Scoring with Gemini, one creator at a time (Gemini runs are live only)")
+        scoring = "live"
+    elif client is None:
         if not os.getenv("ANTHROPIC_API_KEY"):
             raise RuntimeError("Set ANTHROPIC_API_KEY before running the enrichment pipeline")
         client = anthropic.Anthropic()
     if not os.getenv("YOUTUBE_API_KEY") and any(c.get("youtube_url") for c in creators):
         raise RuntimeError("The input has YouTube channels; set YOUTUBE_API_KEY first")
 
-    run = Run(output_path, rules, client, poll_seconds)
-    if run.pending.entries:
+    run = Run(output_path, rules, client, poll_seconds, provider)
+    if run.pending.entries and provider == "claude":
         run.collect_batches()  # finish what a stopped run left behind
+    elif run.pending.entries:
+        logger.warning("Claude batches from an earlier run are waiting; run with Claude to collect them")
 
     # Pick the creators that are new or were scored over RESCORE_AFTER_DAYS ago.
     todo: list[tuple[dict[str, str], tuple | None]] = []
@@ -408,7 +423,8 @@ def run_pipeline(
     else:
         for record in queue:
             run.score_live(record)
-    run.collect_batches()
+    if provider == "claude":
+        run.collect_batches()
 
     counts = deliver(
         run.store,
@@ -483,6 +499,12 @@ def main(argv: list[str] | None = None) -> int:
         f"creator; auto: batch when {BATCH_THRESHOLD} or more creators need scoring",
     )
     parser.add_argument(
+        "--provider",
+        choices=("claude", "gemini"),
+        help="scoring model provider (default: SCORING_PROVIDER, else claude). Gemini is for "
+        "small test runs: it scores live, one creator at a time",
+    )
+    parser.add_argument(
         "--rescore-all",
         action="store_true",
         help="score every creator in the input again, even if scored recently "
@@ -514,6 +536,7 @@ def main(argv: list[str] | None = None) -> int:
                 scoring=args.scoring,
                 hubspot=hubspot,
                 rescore_all=args.rescore_all,
+                provider=args.provider,
             )
     except (OSError, ValueError, RuntimeError, requests.RequestException, anthropic.APIError) as error:
         parser.exit(1, f"error: {error}\n")

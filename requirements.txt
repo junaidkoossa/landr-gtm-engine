@@ -2,5 +2,7 @@
 # needs to be recent enough for structured outputs and server-side fallbacks.
 anthropic>=2.10.0,<3
 beautifulsoup4>=4.12,<5
+# Only needed for Gemini test runs (SCORING_PROVIDER=gemini).
+google-genai>=3.4,<4
 python-dotenv>=1.0,<2
 requests>=2.32,<3

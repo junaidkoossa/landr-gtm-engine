@@ -33,6 +33,7 @@ OUTPUT_COLUMNS = (
     "score_adjustment",
     "adjustment_reason",
     "score_breakdown",
+    "scored_by",
     "bottleneck",
     "custom_hook",
     "data_sources",

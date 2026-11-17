@@ -4,6 +4,12 @@
 LIVE_MODEL = "claude-sonnet-5-5"
 BATCH_MODEL = "claude-sonnet-5-5"
 
+# Gemini, for small test runs only (SCORING_PROVIDER=gemini): live scoring, no batches.
+# Free-tier limits vary by model and project; check them in Google AI Studio.
+GEMINI_MODEL = "gemini-3.8-flash"
+GEMINI_REQUESTS_PER_MINUTE = 10
+GEMINI_MAX_RETRIES = 3
+
 # In "auto" scoring mode, runs scoring at least this many creators use the Batch API.
 BATCH_THRESHOLD = 20
 # A batch is submitted every time this many creators have evidence collected.

@@ -9,6 +9,8 @@ from src.rules import scoring_rules
 from src.scoring import MAX_ADJUSTMENT
 from src.settings import BATCH_MODEL, BATCH_POLL_SECONDS, LIVE_MODEL
 
+PROVIDERS = ("claude", "gemini")
+
 logger = logging.getLogger(__name__)
 # Models that support server-side refusal fallbacks ("default" routing).
 FALLBACK_MODELS = {
@@ -78,12 +80,32 @@ SYSTEM_PROMPT = (
 )
 
 
+def scoring_provider(value: str | None = None) -> str:
+    """claude (default) or gemini, from the argument or SCORING_PROVIDER."""
+    provider = (value or os.getenv("SCORING_PROVIDER") or "claude").strip().lower()
+    if provider not in PROVIDERS:
+        raise ValueError(f"SCORING_PROVIDER must be one of {', '.join(PROVIDERS)}, not {provider!r}")
+    return provider
+
+
 def live_model() -> str:
     return os.getenv("CLAUDE_MODEL") or LIVE_MODEL
 
 
 def batch_model() -> str:
     return os.getenv("CLAUDE_BATCH_MODEL") or BATCH_MODEL
+
+
+def build_payload(creator: dict[str, str], evidence: dict[str, object], rules: dict[str, object]) -> str:
+    """The rules and evidence for one creator, as the JSON message every provider gets."""
+    payload = {
+        "vertical_rules": scoring_rules(rules),
+        "evidence": {
+            "creator": creator,
+            **{field: evidence.get(field) for field in EVIDENCE_FIELDS},
+        },
+    }
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def build_request(
@@ -93,13 +115,6 @@ def build_request(
     model: str | None = None,
 ) -> dict[str, object]:
     """Messages API parameters for scoring one creator (shared by live and batch scoring)."""
-    payload = {
-        "vertical_rules": scoring_rules(rules),
-        "evidence": {
-            "creator": creator,
-            **{field: evidence.get(field) for field in EVIDENCE_FIELDS},
-        },
-    }
     return {
         "model": model or live_model(),
         "max_tokens": MAX_TOKENS,
@@ -108,7 +123,7 @@ def build_request(
             "effort": EFFORT,
             "format": {"type": "json_schema", "schema": OUTPUT_SCHEMA},
         },
-        "messages": [{"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
+        "messages": [{"role": "user", "content": build_payload(creator, evidence, rules)}],
     }
 
 
@@ -121,24 +136,29 @@ def parse_response(creator: dict[str, str], message) -> dict[str, object]:
         raise ValueError(f"Claude ran out of output tokens scoring {name}")
 
     content = next((block.text for block in message.content if block.type == "text"), None)
+    return validate_result(name, content, "Claude")
+
+
+def validate_result(name: str, content: str | None, provider: str) -> dict[str, object]:
+    """Check a model's JSON reply (the same rules for every provider)."""
     if not content:
-        raise ValueError(f"Claude returned no enrichment for {name}")
+        raise ValueError(f"{provider} returned no enrichment for {name}")
     try:
         result = json.loads(content)
     except json.JSONDecodeError as error:
-        raise ValueError(f"Claude returned invalid JSON for {name}") from error
+        raise ValueError(f"{provider} returned invalid JSON for {name}") from error
 
     if not isinstance(result, dict):
-        raise ValueError(f"Claude returned a non-object result for {name}")
+        raise ValueError(f"{provider} returned a non-object result for {name}")
     adjustment = result.get("adjustment")
     if isinstance(adjustment, bool) or not isinstance(adjustment, int) or abs(adjustment) > MAX_ADJUSTMENT:
-        raise ValueError(f"Claude returned an invalid score adjustment for {name}")
+        raise ValueError(f"{provider} returned an invalid score adjustment for {name}")
     reason = result.get("adjustment_reason")
     if not isinstance(reason, str):
-        raise ValueError(f"Claude returned an invalid adjustment_reason for {name}")
+        raise ValueError(f"{provider} returned an invalid adjustment_reason for {name}")
     for field in ("bottleneck", "custom_hook"):
         if not isinstance(result.get(field), str) or not result[field].strip():
-            raise ValueError(f"Claude returned an invalid {field} for {name}")
+            raise ValueError(f"{provider} returned an invalid {field} for {name}")
 
     return {
         "score_adjustment": adjustment,
@@ -153,8 +173,13 @@ def enrich_creator(
     evidence: dict[str, object],
     rules: dict[str, object],
     client: anthropic.Anthropic | None = None,
+    provider: str | None = None,
 ) -> dict[str, object]:
-    """Score one creator right away (used for small runs)."""
+    """Score one creator right away (used for small runs, and for every Gemini run)."""
+    if scoring_provider(provider) == "gemini":
+        from src.gemini import score_with_gemini  # only needs google-genai when used
+
+        return score_with_gemini(creator, evidence, rules)
     if client is None:
         client = anthropic.Anthropic()
     request = build_request(creator, evidence, rules)
@@ -165,7 +190,7 @@ def enrich_creator(
         )
     else:
         response = client.messages.create(**request)
-    return parse_response(creator, response)
+    return {**parse_response(creator, response), "scored_by": request["model"]}
 
 
 def submit_batch(
@@ -211,7 +236,10 @@ def batch_results(
         result = entry.result
         if result.type == "succeeded":
             try:
-                outcomes[entry.custom_id] = parse_response(creator, result.message)
+                outcomes[entry.custom_id] = {
+                    **parse_response(creator, result.message),
+                    "scored_by": getattr(result.message, "model", None) or batch_model(),
+                }
             except ValueError as error:
                 outcomes[entry.custom_id] = error
         elif result.type == "errored":
