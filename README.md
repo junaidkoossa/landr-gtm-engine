@@ -277,6 +277,23 @@ Both modes use `claude-sonnet-5-5` (override with `CLAUDE_MODEL` and `CLAUDE_BAT
 Submitted batches are saved in the pending file. If the run is stopped, running it
 again collects them first instead of paying again.
 
+### Gemini for small test runs
+
+For checking the pipeline end to end without spending Claude credits, scoring can use
+Gemini instead: set `SCORING_PROVIDER=gemini` in `.env` or pass `--provider gemini`.
+It is meant for a handful of creators, not full runs.
+
+- The prompt, output schema, base score, ±1 adjustment and injection guard are the
+  same as with Claude; only the model making the adjustment changes.
+- Gemini always scores live, one request per creator (`--scoring` is ignored), and any
+  pending Claude batches are left for the next Claude run.
+- The model defaults to `gemini-3.8-flash` (override with `GEMINI_MODEL`). Requests are
+  spaced to 10 a minute; a per-minute rate limit or a server error is retried up to 3
+  times, and the daily free-tier limit stops the run with a message. Free-tier limits
+  differ by model and project and are shown in
+  [Google AI Studio](https://aistudio.google.com/).
+- The `scored_by` column records which model scored each row.
+
 ## Setup
 
 On a Mac, use `python3` (macOS has no `python` or `pip` command until a virtual
@@ -294,7 +311,7 @@ If `python3` itself isn't found, install Python 3.11 or newer from
 
 Set these in `.env`:
 
-- `ANTHROPIC_API_KEY` (required).
+- `ANTHROPIC_API_KEY` (required unless scoring with Gemini).
 - `YOUTUBE_API_KEY` if the input has YouTube channels. In Google Cloud Console,
   enable "YouTube Data API v3" for a project and create an API key.
 - `DISCOGS_TOKEN` to add Discogs for labels: Discogs settings → Developers →
@@ -302,6 +319,9 @@ Set these in `.env`:
 - `DATA_SOURCE_CONTACT`: a URL or email MusicBrainz and Discogs can contact you at.
   MusicBrainz asks for this in every request's User-Agent.
 - `CLAUDE_MODEL` / `CLAUDE_BATCH_MODEL` to override the live and batch scoring models.
+- `SCORING_PROVIDER` (`claude` by default, or `gemini`), `GEMINI_API_KEY` and
+  optionally `GEMINI_MODEL` for Gemini test runs. Create the key at
+  [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
 - `INSTAGRAM_ACCESS_TOKEN` and `INSTAGRAM_BUSINESS_ID` for Instagram:
   1. Switch an Instagram account you own to a Business or Creator account and link it
      to a Facebook Page.
@@ -335,6 +355,7 @@ python -m src.main
 python -m src.main --scoring batch
 python -m src.main --resend-unsent
 python -m src.main --rescore-all   # score everyone again, e.g. after changing the weights
+python -m src.main --provider gemini   # small test run scored by Gemini
 ```
 
 Input, rules, and output paths can be overridden with `--input`, `--rules`,
