@@ -306,7 +306,8 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-If `python3` itself isn't found, install Python 3.11 or newer from
+The code needs Python 3.10 or newer (`python3 --version`). If `python3` itself isn't
+found, or is older, install a current Python from
 [python.org](https://www.python.org/downloads/macos/) or with `brew install python`.
 
 Set these in `.env`:

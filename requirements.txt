@@ -1,8 +1,8 @@
-# Lower bounds are the versions this was built and tested with. The Anthropic SDK
-# needs to be recent enough for structured outputs and server-side fallbacks.
+# Lower bounds are the versions this was built and tested with, on Python 3.10+.
+# The Anthropic SDK needs to be recent enough for structured outputs and server-side fallbacks.
 anthropic>=2.10.0,<3
 beautifulsoup4>=4.12,<5
-# Only needed for Gemini test runs (SCORING_PROVIDER=gemini).
-google-genai>=3.4,<4
+# Only needed for Gemini test runs (SCORING_PROVIDER=gemini). 3.x needs Python 3.11+.
+google-genai>=2.33,<3
 python-dotenv>=1.0,<2
 requests>=2.32,<3
