@@ -1,5 +1,8 @@
+import copy
 import json
 from pathlib import Path
+
+from src.scoring import DEFAULT_SCORING, validate_scoring
 
 REQUIRED_RULE_FIELDS = (
     "target_vertical",
@@ -7,6 +10,9 @@ REQUIRED_RULE_FIELDS = (
     "signal_keywords",
     "evaluation_criteria",
 )
+# Creators scoring below this are written to the CSV but not sent to the webhook.
+# Scores run 1-10, so 1 sends everyone.
+DEFAULT_ACTIVATION_MIN_SCORE = 1
 
 
 def load_vertical_rules(path: str | Path) -> dict[str, object]:
@@ -31,4 +37,14 @@ def load_vertical_rules(path: str | Path) -> dict[str, object]:
         isinstance(keyword, str) and keyword.strip() for keyword in keywords
     ):
         raise ValueError(f"{path} field 'signal_keywords' must be a list of non-empty strings")
+
+    min_score = rules.setdefault("activation_min_score", DEFAULT_ACTIVATION_MIN_SCORE)
+    if isinstance(min_score, bool) or not isinstance(min_score, int) or not 1 <= min_score <= 10:
+        raise ValueError(f"{path} field 'activation_min_score' must be an integer from 1 to 10")
+    rules["scoring"] = validate_scoring(rules.get("scoring", copy.deepcopy(DEFAULT_SCORING)))
     return rules
+
+
+def scoring_rules(rules: dict[str, object]) -> dict[str, object]:
+    """The part of the rules the model scores against (pipeline settings left out)."""
+    return {field: rules[field] for field in REQUIRED_RULE_FIELDS}

@@ -10,5 +10,47 @@
     "new release",
     "latest release"
   ],
-  "evaluation_criteria": "Score 1-10 based on active digital storefronts and release frequency that could benefit from distribution."
+  "evaluation_criteria": "The score is weighted in code (see 'scoring'): creators on steady views, release consistency, a storefront and audience size; labels on release consistency and catalogue size, with a storefront as a small bonus. Favour creators who release constantly and are consistently watched over those carried by one breakout video. Treat missing figures as unknown, not zero.",
+  "activation_min_score": 1,
+  "scoring": {
+    "creator": {
+      "steady_views": {
+        "points": 4,
+        "bands": [
+          50000,
+          250000,
+          1000000,
+          5000000
+        ]
+      },
+      "consistency": {
+        "points": 3
+      },
+      "storefront": {
+        "points": 2
+      },
+      "audience": {
+        "points": 1,
+        "min_followers": 10000
+      }
+    },
+    "label": {
+      "consistency": {
+        "points": 5
+      },
+      "catalogue_size": {
+        "points": 5,
+        "bands": [
+          10,
+          50,
+          100,
+          250,
+          500
+        ]
+      },
+      "storefront_bonus": {
+        "points": 1
+      }
+    }
+  }
 }
