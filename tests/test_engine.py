@@ -437,6 +437,48 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(failures[0]["status"], "skipped")
         self.assertEqual([row["name"] for row in self.output()], ["Fine"])
 
+    def test_account_errors_stop_the_run_without_counting_attempts(self):
+        import anthropic
+
+        from src.enricher import ScoringUnavailable
+
+        def api_error(cls, status, message):
+            response = SimpleNamespace(status_code=status, headers={}, request=object())
+            return cls(message, response=response, body={"error": {"message": message}})
+
+        input_path = self.write_input(("One", "https://one.example"), ("Two", "https://two.example"))
+        credit = api_error(anthropic.BadRequestError, 400, "Your credit balance is too low to access the Anthropic API.")
+        for error in (credit, api_error(anthropic.InternalServerError, 529, "Overloaded")):
+            with (
+                patch("src.main.collect_evidence", return_value=SCRAPE_OK),
+                patch("src.main.enrich_creator", side_effect=error) as enrich,
+            ):
+                with self.assertRaisesRegex(ScoringUnavailable, "Stopped scoring"):
+                    run_pipeline(input_path, self.rules_path, self.output_path, client=object())
+            self.assertEqual(enrich.call_count, 1)
+            self.assertFalse(self.files["failures"].exists())
+
+        # An error about one creator's request is still that creator's failed attempt.
+        bad = api_error(anthropic.BadRequestError, 400, "messages: text content blocks must be non-empty")
+        with (
+            patch("src.main.collect_evidence", return_value=SCRAPE_OK),
+            patch("src.main.enrich_creator", side_effect=[bad, enrichment(6)]),
+        ):
+            run_pipeline(input_path, self.rules_path, self.output_path, client=object())
+        self.assertEqual([row["name"] for row in self.output(self.files["failures"])], ["One"])
+
+    def test_retry_failed_clears_earlier_attempts(self):
+        input_path = self.write_input(("Dead", "https://dead.example"))
+        broken = Mock(side_effect=requests.HTTPError("404 Client Error"))
+        for _ in range(3):
+            self.run_with(input_path, {}, collect=broken)
+        self.assertEqual(self.output(self.files["failures"])[0]["status"], "skipped")
+        with patch("src.main.collect_evidence", return_value=SCRAPE_OK), \
+                patch("src.main.enrich_creator", return_value=enrichment(7)):
+            run_pipeline(input_path, self.rules_path, self.output_path, client=object(), retry_failed=True)
+        self.assertEqual(self.output(self.files["failures"]), [])
+        self.assertEqual([row["name"] for row in self.output()], ["Dead"])
+
     def test_unreadable_social_rows_are_skipped_for_good(self):
         input_path = self.write_input(("Tree", "https://linktr.ee/someone"))
         with self.assertLogs("src.main", level="WARNING") as logs:

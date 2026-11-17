@@ -177,8 +177,12 @@ evidence fields (see `src/collect.py`), so it can be added alongside the free on
    `ACTIVATION_WEBHOOK_URL` and to HubSpot, and record the result in each row.
 
 If a creator's data can't be collected or Claude's reply can't be used, the pipeline
-logs a warning, records it in the failures file and carries on. An invalid Anthropic
-API key stops the run, since every creator would fail the same way.
+logs a warning, records it in the failures file and carries on. Problems with the
+account or the service rather than the creator (a rejected API key, no credit left, a
+rate limit or outage that outlasts the retries, Gemini's daily limit) stop the run with
+a message instead, since every creator would fail the same way. These are not counted
+as failed attempts, and creators already scored are kept. `--retry-failed` empties the
+failures file at the start of a run, so creators that failed before are tried again.
 
 ### Files the pipeline keeps
 
@@ -188,7 +192,7 @@ All sit next to the output CSV (default `data/`):
 | --- | --- |
 | `enriched_creators.csv` | One row per creator, with `webhook_status` (`sent`, `failed`, `below_min_score`, `no_webhook`), `hubspot_status` (`synced`, `failed`, `below_min_score`, `no_email`, `not_configured`), when each was sent, and `needs_review` with a `review_reason` |
 | `enriched_creators.unsent.csv` | Every creator that reached neither the webhook nor HubSpot, for review |
-| `enriched_creators.failures.csv` | Creators that failed, with the attempt count and last error. After 3 attempts the status is `skipped`; delete the row to try again |
+| `enriched_creators.failures.csv` | Creators that failed, with the attempt count and last error. After 3 attempts the status is `skipped`; delete the row, or run with `--retry-failed`, to try again |
 | `enriched_creators.review_matches.csv` | Label-name variant matches to check |
 | `enriched_creators.pending_batches.json` | Batches submitted but not yet collected (only while a run is waiting) |
 
@@ -290,10 +294,12 @@ model are scoring. It is meant for a handful of creators, not full runs.
 - Gemini always scores live, one request per creator (`--scoring` is ignored), and any
   pending Claude batches are left for the next Claude run.
 - The model defaults to `gemini-3.8-flash` (override with `GEMINI_MODEL`). Requests are
-  spaced to 10 a minute; a per-minute rate limit or a server error is retried up to 3
-  times, and the daily free-tier limit stops the run with a message. Free-tier limits
-  differ by model and project and are shown in
-  [Google AI Studio](https://aistudio.google.com/).
+  spaced to 10 a minute. A per-minute rate limit or "high demand" (503) is retried up to
+  5 times, waiting 5, 10, 20, 40 and 60 seconds (or as long as the API asks). If the
+  model is still busy, `gemini-3.5-flash-lite` is tried the same way (change it with
+  `GEMINI_FALLBACK_MODEL`, or set it to `none`). If that is busy too, or the daily
+  free-tier limit is used up, the run stops with a message. Free-tier limits differ by
+  model and project and are shown in [Google AI Studio](https://aistudio.google.com/).
 - The `scored_by` column records which model scored each row.
 
 ## Setup
@@ -359,6 +365,7 @@ python -m src.main --scoring batch
 python -m src.main --resend-unsent
 python -m src.main --rescore-all   # score everyone again, e.g. after changing the weights
 python -m src.main --provider gemini   # small test run scored by Gemini
+python -m src.main --retry-failed      # try creators that failed earlier runs again
 ```
 
 Input, rules, and output paths can be overridden with `--input`, `--rules`,

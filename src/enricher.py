@@ -11,6 +11,30 @@ from src.settings import BATCH_MODEL, BATCH_POLL_SECONDS, LIVE_MODEL
 
 PROVIDERS = ("claude", "gemini")
 
+
+class ScoringUnavailable(RuntimeError):
+    """The scoring API can't take any request right now (key, billing, quota or outage).
+
+    The run stops and the creator is not counted as a failed attempt, since the
+    creator had nothing to do with it."""
+
+
+def claude_unavailable(error: Exception) -> str | None:
+    """Why no Claude request can succeed right now, or None if the error is about this creator."""
+    if isinstance(error, (anthropic.AuthenticationError, anthropic.PermissionDeniedError)):
+        return "ANTHROPIC_API_KEY was rejected"
+    if isinstance(error, anthropic.APIConnectionError):
+        return "couldn't reach the Anthropic API"
+    if isinstance(error, anthropic.APIStatusError):
+        message = str(error).lower()
+        if "credit balance" in message or "billing" in message:
+            return "the Anthropic account is out of credits (Plans & Billing in the Claude Console)"
+        if error.status_code == 429:
+            return "Anthropic rate limit reached"
+        if error.status_code >= 500:
+            return f"the Anthropic API is unavailable ({error.status_code})"
+    return None
+
 logger = logging.getLogger(__name__)
 # Models that support server-side refusal fallbacks ("default" routing).
 FALLBACK_MODELS = {

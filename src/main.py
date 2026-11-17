@@ -12,9 +12,11 @@ from src.activate import WEBHOOK_FORMATS, send_to_webhook
 from src.collect import MissingCredentials, UnsupportedSource, collect_evidence, is_label
 from src.enricher import (
     EVIDENCE_FIELDS,
+    ScoringUnavailable,
     batch_model,
     batch_results,
     build_request,
+    claude_unavailable,
     enrich_creator,
     live_model,
     scoring_provider,
@@ -58,7 +60,6 @@ from src.store import (
 
 logger = logging.getLogger(__name__)
 
-FATAL_API_ERRORS = (anthropic.AuthenticationError, anthropic.PermissionDeniedError)
 # What Claude sees about the creator (never the email).
 CREATOR_FIELDS = ("name", "target_type", "website_url", "youtube_url", "storefront_url", "instagram", "tiktok")
 
@@ -193,10 +194,15 @@ class Run:
         creator = {field: record.get(field, "") for field in CREATOR_FIELDS}
         try:
             enrichment = enrich_creator(creator, record, self.rules, self.client, self.provider)
-        except FATAL_API_ERRORS:
-            # Every later creator would fail the same way, so stop instead of skipping.
-            raise
-        except (ValueError, anthropic.APIError) as error:
+        except anthropic.APIError as error:
+            reason = claude_unavailable(error)
+            if reason:
+                # Every later creator would fail the same way: stop, and don't count it
+                # against this creator.
+                raise ScoringUnavailable(f"Stopped scoring: {reason}. {error}") from error
+            self.fail(record, error)
+            return
+        except ValueError as error:
             self.fail(record, error)
             return
         self.finish(record, enrichment)
@@ -285,11 +291,13 @@ def run_pipeline(
     hubspot: str | None = None,
     rescore_all: bool = False,
     provider: str | None = None,
+    retry_failed: bool = False,
 ) -> list[dict[str, object]]:
     """Score new and stale creators, keep the output CSV up to date, and return this run's rows.
 
     rescore_all scores every creator in the input again, however recently it was scored
-    (used once to move older rows onto a new scoring scale)."""
+    (used once to move older rows onto a new scoring scale). retry_failed empties the
+    failures file first, so creators skipped after failed attempts are tried again."""
     creators = load_creators(input_path)
     rules = load_vertical_rules(rules_path)
     # A client passed in is a Claude client, so it means Claude unless told otherwise.
@@ -315,6 +323,10 @@ def run_pipeline(
         raise RuntimeError("The input has YouTube channels; set YOUTUBE_API_KEY first")
 
     run = Run(output_path, rules, client, poll_seconds, provider)
+    if retry_failed and run.failures.rows:
+        logger.info("Clearing %d failed attempts so those creators are tried again", len(run.failures.rows))
+        run.failures.rows.clear()
+        run.failures.save()
     if run.pending.entries and provider == "claude":
         run.collect_batches()  # finish what a stopped run left behind
     elif run.pending.entries:
@@ -518,6 +530,11 @@ def main(argv: list[str] | None = None) -> int:
         "(e.g. to move older rows onto the current scoring scale)",
     )
     parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="clear the failures file first, so creators that failed before are tried again",
+    )
+    parser.add_argument(
         "--resend-unsent",
         action="store_true",
         help="only retry the webhook and HubSpot for creators not yet delivered (no scoring)",
@@ -544,6 +561,7 @@ def main(argv: list[str] | None = None) -> int:
                 hubspot=hubspot,
                 rescore_all=args.rescore_all,
                 provider=args.provider,
+                retry_failed=args.retry_failed,
             )
     except (OSError, ValueError, RuntimeError, requests.RequestException, anthropic.APIError) as error:
         parser.exit(1, f"error: {error}\n")

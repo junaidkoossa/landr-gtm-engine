@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 from google.genai import errors
 
 from src import gemini
-from src.enricher import OUTPUT_SCHEMA, SYSTEM_PROMPT, enrich_creator, scoring_provider
+from src.enricher import OUTPUT_SCHEMA, SYSTEM_PROMPT, ScoringUnavailable, enrich_creator, scoring_provider
 
 RULES = {"target_vertical": "Music", "ideal_customer_profile": "Creators", "signal_keywords": [],
          "evaluation_criteria": "Score fit."}
@@ -71,10 +71,25 @@ class GeminiTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "GEMINI_API_KEY"):
             gemini.score_with_gemini({"name": "A"}, {}, RULES, gemini_client(bad_key))
 
-    def test_gives_up_after_retries_and_reports_cut_off_replies(self):
-        busy = errors.ServerError(503, {"error": {"code": 503, "message": "overloaded", "status": "UNAVAILABLE"}})
-        with self.assertRaisesRegex(ValueError, "couldn't score A"):
-            gemini.score_with_gemini({"name": "A"}, {}, RULES, gemini_client(*[busy] * 4))
+    def test_busy_model_falls_back_then_stops_the_run(self):
+        busy = errors.ServerError(503, {"error": {"code": 503, "message": "high demand", "status": "UNAVAILABLE"}})
+        tries = gemini.GEMINI_MAX_RETRIES + 1
+        client = gemini_client(*[busy] * tries, GOOD)
+        result = gemini.score_with_gemini({"name": "A"}, {}, RULES, client)
+        self.assertEqual(result["scored_by"], "gemini-3.5-flash-lite")
+        models = [call.kwargs["model"] for call in client.models.generate_content.call_args_list]
+        self.assertEqual(models, ["gemini-3.8-flash"] * tries + ["gemini-3.5-flash-lite"])
+        self.assertEqual([call.args[0] for call in self.sleep.call_args_list], [5, 10, 20, 40, 60])
+
+        with self.assertRaisesRegex(ScoringUnavailable, "too busy"):
+            gemini.score_with_gemini({"name": "A"}, {}, RULES, gemini_client(*[busy] * tries * 2))
+        with patch.dict(os.environ, {"GEMINI_FALLBACK_MODEL": "none"}):
+            client = gemini_client(*[busy] * tries)
+            with self.assertRaises(ScoringUnavailable):
+                gemini.score_with_gemini({"name": "A"}, {}, RULES, client)
+            self.assertEqual(client.models.generate_content.call_count, tries)
+
+    def test_cut_off_replies_fail_only_that_creator(self):
         with self.assertRaisesRegex(ValueError, "ran out of output tokens"):
             gemini.score_with_gemini({"name": "A"}, {}, RULES, gemini_client(("{", "FinishReason.MAX_TOKENS")))
 

@@ -7,8 +7,10 @@ BATCH_MODEL = "claude-sonnet-5-5"
 # Gemini, for small test runs only (SCORING_PROVIDER=gemini): live scoring, no batches.
 # Free-tier limits vary by model and project; check them in Google AI Studio.
 GEMINI_MODEL = "gemini-3.8-flash"
+# Tried when GEMINI_MODEL stays overloaded or rate-limited after its retries.
+GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
 GEMINI_REQUESTS_PER_MINUTE = 10
-GEMINI_MAX_RETRIES = 3
+GEMINI_MAX_RETRIES = 5  # waits 5, 10, 20, 40, 60s (or what the API asks for)
 
 # In "auto" scoring mode, runs scoring at least this many creators use the Batch API.
 BATCH_THRESHOLD = 20
