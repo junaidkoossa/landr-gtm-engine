@@ -81,8 +81,14 @@ SYSTEM_PROMPT = (
 
 
 def scoring_provider(value: str | None = None) -> str:
-    """claude (default) or gemini, from the argument or SCORING_PROVIDER."""
-    provider = (value or os.getenv("SCORING_PROVIDER") or "claude").strip().lower()
+    """claude or gemini: the argument, else SCORING_PROVIDER, else whichever API key is set.
+
+    With no provider named, Gemini is picked only when a Gemini key is set and no
+    Anthropic key is; otherwise (both keys, or neither) it is Claude."""
+    provider = (value or os.getenv("SCORING_PROVIDER") or "").strip().lower()
+    if not provider:
+        has_gemini = bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
+        provider = "gemini" if has_gemini and not os.getenv("ANTHROPIC_API_KEY") else "claude"
     if provider not in PROVIDERS:
         raise ValueError(f"SCORING_PROVIDER must be one of {', '.join(PROVIDERS)}, not {provider!r}")
     return provider

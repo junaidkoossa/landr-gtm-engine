@@ -281,7 +281,9 @@ again collects them first instead of paying again.
 
 For checking the pipeline end to end without spending Claude credits, scoring can use
 Gemini instead: set `SCORING_PROVIDER=gemini` in `.env` or pass `--provider gemini`.
-It is meant for a handful of creators, not full runs.
+If neither is given, Gemini is used when `GEMINI_API_KEY` is set and `ANTHROPIC_API_KEY`
+is not; with both keys set it is Claude. The first line of a run says which provider and
+model are scoring. It is meant for a handful of creators, not full runs.
 
 - The prompt, output schema, base score, ±1 adjustment and injection guard are the
   same as with Claude; only the model making the adjustment changes.
@@ -320,7 +322,7 @@ Set these in `.env`:
 - `DATA_SOURCE_CONTACT`: a URL or email MusicBrainz and Discogs can contact you at.
   MusicBrainz asks for this in every request's User-Agent.
 - `CLAUDE_MODEL` / `CLAUDE_BATCH_MODEL` to override the live and batch scoring models.
-- `SCORING_PROVIDER` (`claude` by default, or `gemini`), `GEMINI_API_KEY` and
+- `SCORING_PROVIDER` (`claude` or `gemini`; blank picks by which key is set), `GEMINI_API_KEY` and
   optionally `GEMINI_MODEL` for Gemini test runs. Create the key at
   [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
 - `INSTAGRAM_ACCESS_TOKEN` and `INSTAGRAM_BUSINESS_ID` for Instagram:

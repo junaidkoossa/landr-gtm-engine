@@ -16,6 +16,7 @@ from src.enricher import (
     batch_results,
     build_request,
     enrich_creator,
+    live_model,
     scoring_provider,
     submit_batch,
     wait_for_batch,
@@ -291,20 +292,25 @@ def run_pipeline(
     (used once to move older rows onto a new scoring scale)."""
     creators = load_creators(input_path)
     rules = load_vertical_rules(rules_path)
-    provider = scoring_provider(provider)
+    # A client passed in is a Claude client, so it means Claude unless told otherwise.
+    provider = scoring_provider(provider or ("claude" if client is not None else None))
     if provider == "gemini":
         # Gemini is for small test runs: always live, never the Batch API.
-        from src.gemini import has_api_key
+        from src.gemini import gemini_model, has_api_key
 
         if not has_api_key():
             raise RuntimeError("Set GEMINI_API_KEY to score with Gemini")
-        if scoring != "live":
-            logger.info("Scoring with Gemini, one creator at a time (Gemini runs are live only)")
         scoring = "live"
-    elif client is None:
-        if not os.getenv("ANTHROPIC_API_KEY"):
-            raise RuntimeError("Set ANTHROPIC_API_KEY before running the enrichment pipeline")
-        client = anthropic.Anthropic()
+        logger.info("Scoring with Gemini (%s), live, one creator at a time", gemini_model())
+    else:
+        if client is None:
+            if not os.getenv("ANTHROPIC_API_KEY"):
+                raise RuntimeError(
+                    "Set ANTHROPIC_API_KEY to score with Claude, or set SCORING_PROVIDER=gemini "
+                    "and GEMINI_API_KEY to score with Gemini"
+                )
+            client = anthropic.Anthropic()
+        logger.info("Scoring with Claude (live: %s, batch: %s)", live_model(), batch_model())
     if not os.getenv("YOUTUBE_API_KEY") and any(c.get("youtube_url") for c in creators):
         raise RuntimeError("The input has YouTube channels; set YOUTUBE_API_KEY first")
 
@@ -501,7 +507,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--provider",
         choices=("claude", "gemini"),
-        help="scoring model provider (default: SCORING_PROVIDER, else claude). Gemini is for "
+        help="scoring model provider (default: SCORING_PROVIDER; if unset, gemini when only "
+        "GEMINI_API_KEY is set, otherwise claude). Gemini is for "
         "small test runs: it scores live, one creator at a time",
     )
     parser.add_argument(

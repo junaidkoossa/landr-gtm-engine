@@ -84,9 +84,36 @@ class GeminiTests(unittest.TestCase):
         self.assertEqual(scoring_provider("claude"), "claude")
         with self.assertRaisesRegex(ValueError, "SCORING_PROVIDER"):
             scoring_provider("openai")
+        with patch.dict(os.environ, {"SCORING_PROVIDER": "Gemini"}, clear=True):
+            self.assertEqual(scoring_provider("claude"), "claude")  # the CLI flag wins
         with patch("src.gemini.score_with_gemini", return_value={"score_adjustment": 0}) as score:
             enrich_creator({"name": "A"}, {}, RULES, provider="gemini")
         score.assert_called_once()
+
+    def test_provider_follows_the_keys_when_not_named(self):
+        cases = [
+            ({"GEMINI_API_KEY": "G"}, "gemini"),
+            ({"GOOGLE_API_KEY": "G"}, "gemini"),
+            ({"GEMINI_API_KEY": "G", "ANTHROPIC_API_KEY": "A"}, "claude"),
+            ({"ANTHROPIC_API_KEY": "A"}, "claude"),
+            ({}, "claude"),
+            ({"GEMINI_API_KEY": "G", "ANTHROPIC_API_KEY": "A", "SCORING_PROVIDER": "gemini"}, "gemini"),
+            ({"GEMINI_API_KEY": "G", "SCORING_PROVIDER": "claude"}, "claude"),
+            ({"GEMINI_API_KEY": "G", "ANTHROPIC_API_KEY": "", "SCORING_PROVIDER": ""}, "gemini"),
+        ]
+        for env, expected in cases:
+            with self.subTest(env=env), patch.dict(os.environ, env, clear=True):
+                self.assertEqual(scoring_provider(), expected)
+
+    def test_claude_without_a_key_says_how_to_use_gemini(self):
+        from src.main import run_pipeline
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "rules.json").write_text(json.dumps(RULES))
+            (root / "in.csv").write_text("name,target_type,website_url\nA,creator,https://a.example\n")
+            with patch.dict(os.environ, {"SCORING_PROVIDER": "claude", "GEMINI_API_KEY": "G"}, clear=True):
+                with self.assertRaisesRegex(RuntimeError, "SCORING_PROVIDER=gemini"):
+                    run_pipeline(root / "in.csv", root / "rules.json", root / "out.csv")
 
     def test_pipeline_with_gemini_scores_live_and_never_batches(self):
         from src.main import run_pipeline
@@ -103,10 +130,13 @@ class GeminiTests(unittest.TestCase):
                 patch("src.main.collect_evidence", return_value=evidence),
                 patch("src.gemini._get_client", return_value=gemini_client(*[GOOD] * 25)),
                 patch("src.main.submit_batch") as submit,
+                self.assertLogs("src.main", level="INFO") as logs,
             ):
+                # Only a Gemini key is set, so Gemini scores without SCORING_PROVIDER.
                 results = run_pipeline(root / "in.csv", root / "rules.json", root / "out.csv",
-                                       scoring="batch", provider="gemini")
+                                       scoring="batch")
             submit.assert_not_called()
+            self.assertIn("Scoring with Gemini (gemini-3.8-flash)", logs.output[0])
             self.assertEqual(len(results), 25)
             self.assertEqual({row["scored_by"] for row in results}, {"gemini-3.8-flash"})
             with patch.dict(os.environ, {}, clear=True):
