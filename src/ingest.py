@@ -10,3 +10,4 @@ with open("data/input_creators.csv", encoding="utf-8-sig") as ingestion:
             print("Missing website")
         if not row["target_type"].strip():
             print("Missing target type")
+
