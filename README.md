@@ -48,3 +48,6 @@ Run the test suite with:
 ```bash
 python -m unittest discover -s tests
 ```
+
+For a guide to reading the project history and commit labels, see
+[CONTRIBUTING.md](CONTRIBUTING.md).
