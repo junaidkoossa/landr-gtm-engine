@@ -24,6 +24,7 @@ from src.enricher import (
     wait_for_batch,
 )
 from src.guard import suspicious_phrases
+from src.hooks import HookWriter, hook_min_score, hook_provider
 from src.hubspot import access_token as hubspot_token
 from src.hubspot import upsert_contacts
 from src.ingest import load_creators
@@ -115,7 +116,7 @@ def review_reasons(record: dict[str, object]) -> list[str]:
 class Run:
     """One pipeline run: what has been scored, what failed, and the files that record it."""
 
-    def __init__(self, output_path, rules, client, poll_seconds, provider="claude"):
+    def __init__(self, output_path, rules, client, poll_seconds, provider="claude", hooks="same"):
         self.files = run_files(output_path)
         self.store = CreatorStore(output_path)
         self.failures = FailureLog(self.files["failures"], MAX_ATTEMPTS)
@@ -124,6 +125,11 @@ class Run:
         self.rules = rules
         self.client = client
         self.provider = provider
+        # "same": the scoring reply has the hook; "claude": written after scoring, for
+        # top-scored creators only; "none": no hooks.
+        self.hooks = hooks
+        self.with_hook = hooks == "same"
+        self.hook_writer = HookWriter(client) if hooks == "claude" else None
         self.poll_seconds = poll_seconds
         self.scored: list[dict[str, object]] = []
         self.failed = 0
@@ -136,11 +142,19 @@ class Run:
         reasons = review_reasons(record)
         if any(reason.startswith("suspicious") for reason in reasons):
             logger.warning("Page text for %s looks like it is aimed at the scorer", record["name"])
+        score = final_score(record["base_score"], enrichment["score_adjustment"])
+        if self.hook_writer:
+            creator = {field: record.get(field, "") for field in CREATOR_FIELDS}
+            enrichment = {**enrichment, **self.hook_writer.write(creator, record, self.rules, enrichment, score)}
+        elif self.with_hook:
+            enrichment = {**enrichment, "hook_by": enrichment.get("scored_by", "")}
+        else:
+            enrichment = {**enrichment, "custom_hook": "", "hook_by": ""}
         row = self.store.upsert(
             {
                 **record,
                 **enrichment,
-                "score": final_score(record["base_score"], enrichment["score_adjustment"]),
+                "score": score,
                 "needs_review": "yes" if reasons else "",
                 "review_reason": "; ".join(reasons),
                 "enriched_at": now_iso(),
@@ -169,7 +183,8 @@ class Run:
             self.client,
             {
                 custom_id: build_request(
-                    {field: record.get(field, "") for field in CREATOR_FIELDS}, record, self.rules, model
+                    {field: record.get(field, "") for field in CREATOR_FIELDS}, record, self.rules, model,
+                    with_hook=self.with_hook,
                 )
                 for custom_id, record in by_id.items()
             },
@@ -182,7 +197,7 @@ class Run:
             batch_id, records = entry["batch_id"], entry["records"]
             logger.info("Waiting for scoring batch %s (%d creators)", batch_id, len(records))
             wait_for_batch(self.client, batch_id, self.poll_seconds)
-            for custom_id, outcome in batch_results(self.client, batch_id, records).items():
+            for custom_id, outcome in batch_results(self.client, batch_id, records, self.with_hook).items():
                 if isinstance(outcome, Exception):
                     self.fail(records[custom_id], outcome)
                 else:
@@ -193,7 +208,7 @@ class Run:
     def score_live(self, record: dict[str, object]) -> None:
         creator = {field: record.get(field, "") for field in CREATOR_FIELDS}
         try:
-            enrichment = enrich_creator(creator, record, self.rules, self.client, self.provider)
+            enrichment = enrich_creator(creator, record, self.rules, self.client, self.provider, self.with_hook)
         except anthropic.APIError as error:
             reason = claude_unavailable(error)
             if reason:
@@ -310,19 +325,42 @@ def run_pipeline(
             raise RuntimeError("Set GEMINI_API_KEY to score with Gemini")
         scoring = "live"
         logger.info("Scoring with Gemini (%s), live, one creator at a time", gemini_model())
+    elif provider == "ollama":
+        # A model on this computer: free, always live. Stop now if Ollama isn't up,
+        # before any creator is collected or counted.
+        from src.ollama import check_ready, ollama_host, ollama_model
+
+        check_ready()
+        scoring = "live"
+        logger.info("Scoring with Ollama (%s at %s), live, one creator at a time", ollama_model(), ollama_host())
     else:
         if client is None:
             if not os.getenv("ANTHROPIC_API_KEY"):
                 raise RuntimeError(
                     "Set ANTHROPIC_API_KEY to score with Claude, or set SCORING_PROVIDER=gemini "
-                    "and GEMINI_API_KEY to score with Gemini"
+                    "and GEMINI_API_KEY to score with Gemini, or SCORING_PROVIDER=ollama to score on this computer"
                 )
             client = anthropic.Anthropic()
         logger.info("Scoring with Claude (live: %s, batch: %s)", live_model(), batch_model())
+    hooks = hook_provider(provider)
+    if hooks == "claude":
+        if client is None:
+            if not os.getenv("ANTHROPIC_API_KEY"):
+                raise RuntimeError(
+                    "Set ANTHROPIC_API_KEY so Claude can write the outreach hooks, or set "
+                    "HOOK_PROVIDER=none (no hooks) or HOOK_PROVIDER=same (the scoring model writes them)"
+                )
+            client = anthropic.Anthropic()
+        logger.info("Outreach hooks: Claude (%s), only for creators scoring %d or more",
+                    live_model(), hook_min_score())
+    elif hooks == "none":
+        logger.info("Outreach hooks: none (HOOK_PROVIDER=none)")
+    else:
+        logger.info("Outreach hooks: written by the scoring model, for every creator")
     if not os.getenv("YOUTUBE_API_KEY") and any(c.get("youtube_url") for c in creators):
         raise RuntimeError("The input has YouTube channels; set YOUTUBE_API_KEY first")
 
-    run = Run(output_path, rules, client, poll_seconds, provider)
+    run = Run(output_path, rules, client, poll_seconds, provider, hooks)
     if retry_failed and run.failures.rows:
         logger.info("Clearing %d failed attempts so those creators are tried again", len(run.failures.rows))
         run.failures.rows.clear()
@@ -518,10 +556,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--provider",
-        choices=("claude", "gemini"),
+        choices=("claude", "gemini", "ollama"),
         help="scoring model provider (default: SCORING_PROVIDER; if unset, gemini when only "
         "GEMINI_API_KEY is set, otherwise claude). Gemini is for "
-        "small test runs: it scores live, one creator at a time",
+        "small test runs; ollama uses a free model on this computer. Both score live, "
+        "one creator at a time",
     )
     parser.add_argument(
         "--rescore-all",

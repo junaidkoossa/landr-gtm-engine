@@ -36,6 +36,7 @@ OUTPUT_COLUMNS = (
     "scored_by",
     "bottleneck",
     "custom_hook",
+    "hook_by",
     "data_sources",
     "audience_size",
     "release_count",

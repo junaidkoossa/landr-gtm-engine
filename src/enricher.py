@@ -9,7 +9,7 @@ from src.rules import scoring_rules
 from src.scoring import MAX_ADJUSTMENT
 from src.settings import BATCH_MODEL, BATCH_POLL_SECONDS, LIVE_MODEL
 
-PROVIDERS = ("claude", "gemini")
+PROVIDERS = ("claude", "gemini", "ollama")
 
 
 class ScoringUnavailable(RuntimeError):
@@ -83,7 +83,13 @@ OUTPUT_SCHEMA = {
     "required": ["adjustment", "adjustment_reason", "bottleneck", "custom_hook"],
     "additionalProperties": False,
 }
-SYSTEM_PROMPT = (
+# Used when the hook is written separately (HOOK_PROVIDER, see src/hooks.py).
+SCORE_ONLY_SCHEMA = {
+    **OUTPUT_SCHEMA,
+    "properties": {k: v for k, v in OUTPUT_SCHEMA["properties"].items() if k != "custom_hook"},
+    "required": [field for field in OUTPUT_SCHEMA["required"] if field != "custom_hook"],
+}
+_PROMPT_RULES = (
     "Review a creator's fit using only the supplied evidence and rules. "
     "Do not invent facts. The evidence may come from the creator's website, YouTube, "
     "Instagram, TikTok, MusicBrainz or Discogs; data_sources says which. Figures come "
@@ -96,16 +102,33 @@ SYSTEM_PROMPT = (
     "share of views from the single biggest release. estimated_sources lists sources whose "
     "12-month figures were estimated from a shorter run of recent posts; limited_data says "
     "which figures no source had. "
-    "Return a JSON object with exactly four fields: adjustment (-1, 0 or 1: change "
+)
+_ADJUSTMENT_FIELDS = (
+    "adjustment (-1, 0 or 1: change "
     "base_score only if the evidence shows something the weights miss, otherwise 0), "
     "adjustment_reason (one sentence; empty if adjustment is 0), bottleneck (the main "
-    "growth or distribution constraint), and custom_hook (one concise, evidence-based "
-    "outreach angle)."
+    "growth or distribution constraint)"
+)
+SYSTEM_PROMPT = (
+    _PROMPT_RULES + "Return a JSON object with exactly four fields: " + _ADJUSTMENT_FIELDS
+    + ", and custom_hook (one concise, evidence-based outreach angle)."
+)
+SCORE_ONLY_PROMPT = (
+    _PROMPT_RULES + "Return a JSON object with exactly three fields: "
+    + _ADJUSTMENT_FIELDS.replace("adjustment_reason (one sentence; empty if adjustment is 0), ",
+                                 "adjustment_reason (one sentence; empty if adjustment is 0), and ")
+    + "."
 )
 
 
+def scoring_prompt(with_hook: bool = True) -> tuple[str, dict]:
+    """The system prompt and output schema: with the hook, or without it when the hook
+    is written separately. Everything else in the prompt is the same."""
+    return (SYSTEM_PROMPT, OUTPUT_SCHEMA) if with_hook else (SCORE_ONLY_PROMPT, SCORE_ONLY_SCHEMA)
+
+
 def scoring_provider(value: str | None = None) -> str:
-    """claude or gemini: the argument, else SCORING_PROVIDER, else whichever API key is set.
+    """claude, gemini or ollama: the argument, else SCORING_PROVIDER, else whichever API key is set.
 
     With no provider named, Gemini is picked only when a Gemini key is set and no
     Anthropic key is; otherwise (both keys, or neither) it is Claude."""
@@ -143,34 +166,42 @@ def build_request(
     evidence: dict[str, object],
     rules: dict[str, object],
     model: str | None = None,
+    with_hook: bool = True,
 ) -> dict[str, object]:
     """Messages API parameters for scoring one creator (shared by live and batch scoring)."""
+    system, schema = scoring_prompt(with_hook)
     return {
         "model": model or live_model(),
         "max_tokens": MAX_TOKENS,
-        "system": SYSTEM_PROMPT,
+        "system": system,
         "output_config": {
             "effort": EFFORT,
-            "format": {"type": "json_schema", "schema": OUTPUT_SCHEMA},
+            "format": {"type": "json_schema", "schema": schema},
         },
         "messages": [{"role": "user", "content": build_payload(creator, evidence, rules)}],
     }
 
 
-def parse_response(creator: dict[str, str], message) -> dict[str, object]:
+def reply_text(name: str, message, task: str = "score") -> str | None:
+    """The text of a Claude reply, after checking it wasn't refused or cut off."""
+    if message.stop_reason == "refusal":
+        raise ValueError(f"Claude declined to {task} {name}")
+    if message.stop_reason == "max_tokens":
+        raise ValueError(f"Claude ran out of output tokens ({task}: {name})")
+    return next((block.text for block in message.content if block.type == "text"), None)
+
+
+def parse_response(creator: dict[str, str], message, with_hook: bool = True) -> dict[str, object]:
     """Validate Claude's reply and return the adjustment, bottleneck and hook."""
     name = creator["name"]
-    if message.stop_reason == "refusal":
-        raise ValueError(f"Claude declined to score {name}")
-    if message.stop_reason == "max_tokens":
-        raise ValueError(f"Claude ran out of output tokens scoring {name}")
-
-    content = next((block.text for block in message.content if block.type == "text"), None)
-    return validate_result(name, content, "Claude")
+    return validate_result(name, reply_text(name, message), "Claude", with_hook)
 
 
-def validate_result(name: str, content: str | None, provider: str) -> dict[str, object]:
-    """Check a model's JSON reply (the same rules for every provider)."""
+def validate_result(
+    name: str, content: str | None, provider: str, with_hook: bool = True
+) -> dict[str, object]:
+    """Check a model's JSON reply (the same rules for every provider). Without the hook,
+    any custom_hook in the reply is ignored; it is written separately."""
     if not content:
         raise ValueError(f"{provider} returned no enrichment for {name}")
     try:
@@ -186,16 +217,26 @@ def validate_result(name: str, content: str | None, provider: str) -> dict[str, 
     reason = result.get("adjustment_reason")
     if not isinstance(reason, str):
         raise ValueError(f"{provider} returned an invalid adjustment_reason for {name}")
-    for field in ("bottleneck", "custom_hook"):
+    for field in ("bottleneck", "custom_hook") if with_hook else ("bottleneck",):
         if not isinstance(result.get(field), str) or not result[field].strip():
             raise ValueError(f"{provider} returned an invalid {field} for {name}")
 
-    return {
+    checked = {
         "score_adjustment": adjustment,
         "adjustment_reason": reason.strip() if adjustment else "",
         "bottleneck": result["bottleneck"].strip(),
-        "custom_hook": result["custom_hook"].strip(),
     }
+    if with_hook:
+        checked["custom_hook"] = result["custom_hook"].strip()
+    return checked
+
+
+def create_message(client: anthropic.Anthropic, request: dict[str, object]):
+    """Send one Messages API request, with refusal fallbacks where the model has them."""
+    if request["model"] in FALLBACK_MODELS:
+        # If the model declines on safety grounds, the API retries on a fallback model.
+        return client.beta.messages.create(**request, betas=[FALLBACK_BETA], fallbacks="default")
+    return client.messages.create(**request)
 
 
 def enrich_creator(
@@ -204,23 +245,24 @@ def enrich_creator(
     rules: dict[str, object],
     client: anthropic.Anthropic | None = None,
     provider: str | None = None,
+    with_hook: bool = True,
 ) -> dict[str, object]:
-    """Score one creator right away (used for small runs, and for every Gemini run)."""
-    if scoring_provider(provider) == "gemini":
+    """Score one creator right away (used for small runs, and for every Gemini and
+    Ollama run). with_hook=False leaves the hook out, for when it is written separately."""
+    provider = scoring_provider(provider)
+    if provider == "gemini":
         from src.gemini import score_with_gemini  # only needs google-genai when used
 
-        return score_with_gemini(creator, evidence, rules)
+        return score_with_gemini(creator, evidence, rules, with_hook=with_hook)
+    if provider == "ollama":
+        from src.ollama import score_with_ollama
+
+        return score_with_ollama(creator, evidence, rules, with_hook=with_hook)
     if client is None:
         client = anthropic.Anthropic()
-    request = build_request(creator, evidence, rules)
-    if request["model"] in FALLBACK_MODELS:
-        # If the model declines on safety grounds, the API retries on a fallback model.
-        response = client.beta.messages.create(
-            **request, betas=[FALLBACK_BETA], fallbacks="default"
-        )
-    else:
-        response = client.messages.create(**request)
-    return {**parse_response(creator, response), "scored_by": request["model"]}
+    request = build_request(creator, evidence, rules, with_hook=with_hook)
+    response = create_message(client, request)
+    return {**parse_response(creator, response, with_hook), "scored_by": request["model"]}
 
 
 def submit_batch(
@@ -255,7 +297,10 @@ def wait_for_batch(
 
 
 def batch_results(
-    client: anthropic.Anthropic, batch_id: str, creators_by_id: dict[str, dict[str, str]]
+    client: anthropic.Anthropic,
+    batch_id: str,
+    creators_by_id: dict[str, dict[str, str]],
+    with_hook: bool = True,
 ) -> dict[str, dict[str, object] | Exception]:
     """Each custom_id mapped to its enrichment, or to the error that stopped it."""
     outcomes: dict[str, dict[str, object] | Exception] = {}
@@ -267,7 +312,7 @@ def batch_results(
         if result.type == "succeeded":
             try:
                 outcomes[entry.custom_id] = {
-                    **parse_response(creator, result.message),
+                    **parse_response(creator, result.message, with_hook),
                     "scored_by": getattr(result.message, "model", None) or batch_model(),
                 }
             except ValueError as error:

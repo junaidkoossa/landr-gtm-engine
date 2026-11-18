@@ -18,7 +18,7 @@ import os
 import re
 import time
 
-from src.enricher import MAX_TOKENS, ScoringUnavailable, OUTPUT_SCHEMA, SYSTEM_PROMPT, build_payload, validate_result
+from src.enricher import MAX_TOKENS, ScoringUnavailable, build_payload, scoring_prompt, validate_result
 from src.labels import Throttle
 from src.settings import GEMINI_FALLBACK_MODEL, GEMINI_MAX_RETRIES, GEMINI_MODEL, GEMINI_REQUESTS_PER_MINUTE
 
@@ -57,16 +57,21 @@ def _retry_delay(error, attempt: int) -> float:
 
 
 def score_with_gemini(
-    creator: dict[str, str], evidence: dict[str, object], rules: dict[str, object], client=None
+    creator: dict[str, str],
+    evidence: dict[str, object],
+    rules: dict[str, object],
+    client=None,
+    with_hook: bool = True,
 ) -> dict[str, object]:
     """Score one creator with Gemini. Raises ValueError for this creator's failure and
     ScoringUnavailable when no creator could be scored right now (bad key, quota used
     up, model overloaded), so the run stops without counting it against the creator."""
     client = client or _get_client()
+    system, schema = scoring_prompt(with_hook)
     config = {
-        "system_instruction": SYSTEM_PROMPT,
+        "system_instruction": system,
         "response_mime_type": "application/json",
-        "response_json_schema": OUTPUT_SCHEMA,
+        "response_json_schema": schema,
         "max_output_tokens": MAX_TOKENS,
         "automatic_function_calling": {"disable": True},  # no tools; also quiets the "AFC" log line
     }
@@ -92,7 +97,7 @@ def score_with_gemini(
         raise ValueError(f"Gemini ran out of output tokens scoring {creator['name']}")
     if "SAFETY" in finish or "PROHIBITED" in finish or "BLOCKLIST" in finish:
         raise ValueError(f"Gemini declined to score {creator['name']} ({finish})")
-    return {**validate_result(creator["name"], response.text, "Gemini"), "scored_by": model}
+    return {**validate_result(creator["name"], response.text, "Gemini", with_hook), "scored_by": model}
 
 
 class _Busy(Exception):

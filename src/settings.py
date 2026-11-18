@@ -12,6 +12,25 @@ GEMINI_FALLBACK_MODEL = "gemini-3.5-flash-lite"
 GEMINI_REQUESTS_PER_MINUTE = 10
 GEMINI_MAX_RETRIES = 5  # waits 5, 10, 20, 40, 60s (or what the API asks for)
 
+# Ollama, a model running on this computer (SCORING_PROVIDER=ollama): free, live scoring.
+OLLAMA_HOST = "http://localhost:11434"
+OLLAMA_MODEL = "llama3.1:8b"
+# Context window in tokens. Ollama's own default is smaller than one creator's evidence
+# (up to 12,000 characters of page text plus figures), which it would silently cut.
+OLLAMA_NUM_CTX = 16_384
+OLLAMA_MAX_OUTPUT_TOKENS = 1_024
+# A reply that isn't valid JSON (or breaks the output rules) is asked for again this
+# many times before the creator counts as a failed attempt.
+OLLAMA_MAX_RETRIES = 2
+# Seconds to wait for one reply; the first one also waits for the model to load.
+OLLAMA_TIMEOUT_SECONDS = 300
+
+# Outreach hooks. HOOK_PROVIDER "same" has the scoring model write the hook in the same
+# reply (the default for Claude and Gemini); "claude" has Claude write it in a separate
+# call, only for creators scoring at least HOOK_MIN_SCORE (the default for Ollama);
+# "none" writes no hooks.
+HOOK_MIN_SCORE = 7
+
 # In "auto" scoring mode, runs scoring at least this many creators use the Batch API.
 BATCH_THRESHOLD = 20
 # A batch is submitted every time this many creators have evidence collected.
