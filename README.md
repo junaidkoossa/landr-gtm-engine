@@ -105,6 +105,8 @@ The score is worked out in code from fixed weights (`scoring` in
 `config/vertical_rules.json`, logic in `src/scoring.py`). Claude then reads the
 evidence and may move the score by at most 1 point, giving a reason
 (`score_adjustment`, `adjustment_reason`), and writes the bottleneck and outreach hook.
+(Scoring can also run on Gemini or on a free local model through Ollama, and the hook
+can be written separately by Claude for top-scored creators only; see "Ollama" below.)
 `score_breakdown` shows where each point came from.
 
 The aim is to favour creators who release constantly and are consistently watched.
@@ -179,7 +181,7 @@ evidence fields (see `src/collect.py`), so it can be added alongside the free on
 If a creator's data can't be collected or Claude's reply can't be used, the pipeline
 logs a warning, records it in the failures file and carries on. Problems with the
 account or the service rather than the creator (a rejected API key, no credit left, a
-rate limit or outage that outlasts the retries, Gemini's daily limit) stop the run with
+rate limit or outage that outlasts the retries, Gemini's daily limit, Ollama not running) stop the run with
 a message instead, since every creator would fail the same way. These are not counted
 as failed attempts, and creators already scored are kept. `--retry-failed` empties the
 failures file at the start of a run, so creators that failed before are tried again.
@@ -302,6 +304,51 @@ model are scoring. It is meant for a handful of creators, not full runs.
   model and project and are shown in [Google AI Studio](https://aistudio.google.com/).
 - The `scored_by` column records which model scored each row.
 
+### Ollama: free local scoring, Claude hooks for top leads
+
+Scoring is high-volume, mechanical work (a ±1 adjustment, a reason and a bottleneck
+label as JSON), so it can run on a model on your own computer through
+[Ollama](https://ollama.com), free and offline. The outreach hook is the sentence a
+creator actually reads, so with Ollama it is written by Claude, and only for creators
+worth contacting.
+
+Set `SCORING_PROVIDER=ollama` in `.env` (or pass `--provider ollama`), with the Ollama app
+open. The first lines of a run say which model is scoring and who writes the hooks:
+
+```text
+INFO: Scoring with Ollama (llama3.1:8b at http://localhost:11434), live, one creator at a time
+INFO: Outreach hooks: Claude (claude-sonnet-5-5), only for creators scoring 7 or more
+```
+
+- `OLLAMA_HOST` (default `http://localhost:11434`) and `OLLAMA_MODEL` (default
+  `llama3.1:8b`; any model from `ollama list`). No API key.
+- The prompt, base score, ±1 adjustment and injection guard are the same as with Claude.
+  The output schema is sent as Ollama's JSON format, so the model is held to it, and the
+  reply goes through the same checks. A small model still sometimes returns broken JSON
+  or an out-of-range adjustment; that reply is asked for again (up to 3 tries in all),
+  then the creator counts as a normal failed attempt.
+- If Ollama isn't running, doesn't have the model (`ollama pull llama3.1:8b`), or keeps
+  timing out, the run stops with a message before or instead of failing creators, the
+  same as an account error with Claude. Creators already scored are kept.
+- Scoring is live, one creator at a time (`--scoring` is ignored). Each request uses a
+  16K-token context (`OLLAMA_NUM_CTX` in `src/settings.py`) so a full page of evidence
+  isn't cut off; lower it if your computer runs short of memory.
+
+Who writes the hook is set by `HOOK_PROVIDER`:
+
+| `HOOK_PROVIDER` | Hook written by | For | Default for |
+| --- | --- | --- | --- |
+| `same` | the scoring model, in the same reply | every creator | Claude, Gemini |
+| `claude` | Claude (`CLAUDE_MODEL`), in a separate call after scoring | creators scoring `HOOK_MIN_SCORE` (default 7) or more | Ollama |
+| `none` | nobody | no one | |
+
+With `claude`, the scoring model isn't asked for a hook at all, Claude sees the same
+evidence plus the score and bottleneck, and creators below the threshold get an empty
+`custom_hook`. It needs `ANTHROPIC_API_KEY`. If Claude can't write one creator's hook,
+the score is still saved with an empty hook and a warning; a Claude account problem (no
+credit, bad key) stops the run as usual. The `hook_by` column records which model wrote
+each hook.
+
 ## Setup
 
 On a Mac, use `python3` (macOS has no `python` or `pip` command until a virtual
@@ -320,7 +367,8 @@ found, or is older, install a current Python from
 
 Set these in `.env`:
 
-- `ANTHROPIC_API_KEY` (required unless scoring with Gemini).
+- `ANTHROPIC_API_KEY` (required unless scoring with Gemini, or with Ollama and
+  `HOOK_PROVIDER=none`).
 - `YOUTUBE_API_KEY` if the input has YouTube channels. In Google Cloud Console,
   enable "YouTube Data API v3" for a project and create an API key.
 - `DISCOGS_TOKEN` to add Discogs for labels: Discogs settings → Developers →
@@ -331,6 +379,8 @@ Set these in `.env`:
 - `SCORING_PROVIDER` (`claude` or `gemini`; blank picks by which key is set), `GEMINI_API_KEY` and
   optionally `GEMINI_MODEL` for Gemini test runs. Create the key at
   [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
+- `SCORING_PROVIDER=ollama`, and optionally `OLLAMA_HOST`, `OLLAMA_MODEL`,
+  `HOOK_PROVIDER` and `HOOK_MIN_SCORE`, to score on this computer (see "Ollama" above).
 - `INSTAGRAM_ACCESS_TOKEN` and `INSTAGRAM_BUSINESS_ID` for Instagram:
   1. Switch an Instagram account you own to a Business or Creator account and link it
      to a Facebook Page.
@@ -365,6 +415,7 @@ python -m src.main --scoring batch
 python -m src.main --resend-unsent
 python -m src.main --rescore-all   # score everyone again, e.g. after changing the weights
 python -m src.main --provider gemini   # small test run scored by Gemini
+python -m src.main --provider ollama   # score on this computer; Claude writes top hooks
 python -m src.main --retry-failed      # try creators that failed earlier runs again
 ```
 
