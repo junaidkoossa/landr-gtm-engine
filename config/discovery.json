@@ -1,0 +1,73 @@
+{
+  "_note": "Saved searches for python -m src.discover. Genres map to Discogs genre/style and MusicBrainz tags. Countries: Discogs uses names, MusicBrainz two-letter codes. suggested_countries are not searched; move them into countries to use them.",
+  "max_new_leads": 100,
+  "years_back": 1,
+  "founded_within_years": 5,
+  "countries": {
+    "discogs": ["US", "Canada"],
+    "musicbrainz": ["US", "CA"]
+  },
+  "suggested_countries": {
+    "discogs": ["UK", "France", "Germany", "Brazil", "Mexico", "Australia", "Nigeria", "South Africa"],
+    "musicbrainz": ["GB", "FR", "DE", "BR", "MX", "AU", "NG", "ZA"]
+  },
+  "genres": [
+    {"name": "Hip-hop", "discogs": {"genre": "Hip Hop"}, "musicbrainz": {"tag": "hip hop"}},
+    {"name": "R&B", "discogs": {"genre": "Funk / Soul", "style": "Contemporary R&B"}, "musicbrainz": {"tag": "r&b"}},
+    {"name": "Pop", "discogs": {"genre": "Pop"}, "musicbrainz": {"tag": "pop"}},
+    {"name": "Country", "discogs": {"genre": "Folk, World, & Country", "style": "Country"}, "musicbrainz": {"tag": "country"}},
+    {"name": "Rock", "discogs": {"genre": "Rock"}, "musicbrainz": {"tag": "rock"}},
+    {"name": "Indie", "discogs": {"genre": "Rock", "style": "Indie Rock"}, "musicbrainz": {"tag": "indie"}},
+    {"name": "Alternative", "discogs": {"genre": "Rock", "style": "Alternative Rock"}, "musicbrainz": {"tag": "alternative rock"}},
+    {"name": "Electronic", "discogs": {"genre": "Electronic"}, "musicbrainz": {"tag": "electronic"}},
+    {"name": "House", "discogs": {"genre": "Electronic", "style": "House"}, "musicbrainz": {"tag": "house"}},
+    {"name": "Afrobeats", "discogs": {"style": "Afrobeat"}, "musicbrainz": {"tag": "afrobeats"}},
+    {"name": "Latin", "discogs": {"genre": "Latin"}, "musicbrainz": {"tag": "latin"}},
+    {"name": "Dancehall", "discogs": {"genre": "Reggae", "style": "Dancehall"}, "musicbrainz": {"tag": "dancehall"}},
+    {"name": "Lo-fi", "musicbrainz": {"tag": "lo-fi"}}
+  ],
+  "searches": [
+    {
+      "name": "discogs-self-released-artists",
+      "source": "discogs",
+      "kind": "artist",
+      "params": {"label": "Not On Label", "format": "File"},
+      "per_query": 10,
+      "max_leads": 40,
+      "products": ["Distribution", "Mastering"]
+    },
+    {
+      "name": "discogs-active-labels",
+      "source": "discogs",
+      "kind": "label",
+      "params": {"format": "File"},
+      "per_query": 10,
+      "max_leads": 30,
+      "products": ["Distribution", "Mastering", "Samples"]
+    },
+    {
+      "name": "musicbrainz-new-labels",
+      "source": "musicbrainz",
+      "kind": "label",
+      "query": "type:\"Original Production\"",
+      "founded_since": true,
+      "per_query": 10,
+      "max_leads": 15,
+      "products": ["Distribution", "Mastering"]
+    },
+    {
+      "name": "musicbrainz-artists",
+      "source": "musicbrainz",
+      "kind": "artist",
+      "query": "",
+      "per_query": 10,
+      "max_leads": 15,
+      "products": ["Plugins", "Samples", "Distribution"]
+    }
+  ],
+  "major_labels": [
+    "Universal Music", "Sony Music", "Warner Music", "Warner Records", "Atlantic Records",
+    "Columbia", "Interscope", "Def Jam", "Republic Records", "Capitol Records", "RCA Records",
+    "Epic Records", "Island Records", "Virgin Music", "Parlophone", "Elektra", "Motown"
+  ]
+}

@@ -21,6 +21,8 @@ Switching the rules file lets the same workflow evaluate a different customer ve
 | `instagram` | one link needed | `@handle` or profile URL | Instagram Business Discovery |
 | `tiktok` | one link needed | `@handle` or profile URL | Bright Data |
 | `email` | no | Contact email | HubSpot only |
+| `lead_source` | no | `input`, or `discovered:<search>` for rows added by `src.discover` | Tells inputted and discovered leads apart (blank = `input`) |
+| `product_fit` | no | LANDR products a discovered lead points to, or `Partnership` for a major label | Filled by `src.discover` |
 
 Every link a row has is used, and the results are combined. A source that fails is
 noted and skipped as long as another source worked. Creators are matched to earlier
@@ -348,6 +350,45 @@ evidence plus the score and bottleneck, and creators below the threshold get an 
 the score is still saved with an empty hook and a warning; a Claude account problem (no
 credit, bad key) stops the run as usual. The `hook_by` column records which model wrote
 each hook.
+
+## Finding new leads (Discogs and MusicBrainz)
+
+`python -m src.discover` searches Discogs and MusicBrainz for artists and labels that
+are not in your lists yet and adds them to `data/input_creators.csv`. The next
+`python -m src.main` collects evidence and scores them like any other row.
+
+```bash
+python -m src.discover --dry-run     # list what would be added
+python -m src.discover               # add up to 100 new leads
+python -m src.discover --limit 20
+```
+
+The saved searches are in `config/discovery.json`:
+
+| Search | Finds | `product_fit` |
+| --- | --- | --- |
+| `discogs-self-released-artists` | Artists with digital releases on "Not On Label" (Discogs' mark for self-released) this year or last | Distribution; Mastering |
+| `discogs-active-labels` | Labels with digital releases this year or last | Distribution; Mastering; Samples |
+| `musicbrainz-new-labels` | Production labels founded in the last 5 years | Distribution; Mastering |
+| `musicbrainz-artists` | Artists tagged with each genre | Plugins; Samples; Distribution |
+
+- Every search runs for each genre (hip-hop, R&B, pop, country, rock, indie, alternative,
+  electronic, house, afrobeats, latin, dancehall, lo-fi) and country (US and Canada;
+  `suggested_countries` lists more to move in). Genres map to Discogs genres/styles and
+  MusicBrainz tags; MusicBrainz tags are added by volunteers, so coverage is patchy.
+- Each lead's links come from its own Discogs or MusicBrainz page: website, YouTube,
+  Bandcamp and other storefronts, Instagram and TikTok, plus an email when a Discogs
+  label lists one. Leads with no link are skipped, as are leads already in the input
+  or output CSV.
+- Labels whose name contains one in `major_labels` stay in, marked `Partnership`.
+- `max_leads` per search and `max_new_leads` per run keep the run short: Discogs allows
+  60 calls a minute (each lead takes about 2) and MusicBrainz one a second.
+- Discogs needs `DISCOGS_TOKEN`; without it the Discogs searches are skipped.
+- Licensing: MusicBrainz's web service is free for non-commercial use only, and some
+  Discogs data is restricted under its API Terms of Use. Fine for this portfolio project;
+  check both before using the leads commercially.
+
+Not tested against the live APIs yet (the build machine couldn't reach them).
 
 ## Setup
 

@@ -10,6 +10,9 @@ Columns (only name and target_type are required, plus at least one link):
   storefront, whatever the site.
 - instagram / tiktok: a handle (@name) or profile URL.
 - email: a contact email, used for HubSpot only.
+- lead_source: "input" for rows you add, "discovered:<search>" for rows added by
+  python -m src.discover (blank is read as "input").
+- product_fit: the LANDR products a discovered lead points to (optional).
 
 Older files with a single website_url column still work: a YouTube, Instagram or TikTok
 link there is moved to its own column when it's read.
@@ -23,6 +26,7 @@ from src.youtube import is_youtube_url
 
 REQUIRED_COLUMNS = ("name", "target_type")
 LINK_COLUMNS = ("website_url", "youtube_url", "storefront_url", "instagram", "tiktok")
+DISCOVERY_COLUMNS = ("lead_source", "product_fit")
 INPUT_COLUMNS = REQUIRED_COLUMNS + LINK_COLUMNS + ("email",)
 logger = logging.getLogger(__name__)
 
@@ -56,6 +60,8 @@ def load_creators(path: str | Path) -> list[dict[str, str]]:
 
         for row_number, row in enumerate(reader, start=2):
             creator = {column: (row.get(column) or "").strip() for column in INPUT_COLUMNS}
+            if "lead_source" in reader.fieldnames:  # files from python -m src.discover
+                creator.update({column: (row.get(column) or "").strip() for column in DISCOVERY_COLUMNS})
             missing_values = [column for column in REQUIRED_COLUMNS if not creator[column]]
             if not any(creator[column] for column in LINK_COLUMNS):
                 missing_values.append("a link (" + ", ".join(LINK_COLUMNS) + ")")
@@ -66,6 +72,8 @@ def load_creators(path: str | Path) -> list[dict[str, str]]:
                     ", ".join(missing_values),
                 )
                 continue
+            if "lead_source" in creator:
+                creator["lead_source"] = creator["lead_source"] or "input"
             _sort_links(creator)
             creators.append(creator)
 
