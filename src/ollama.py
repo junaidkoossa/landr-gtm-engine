@@ -21,6 +21,7 @@ import re
 
 import requests
 
+from src import costs
 from src.enricher import ScoringUnavailable, build_payload, scoring_prompt, validate_result
 from src.settings import (
     OLLAMA_HOST,
@@ -160,6 +161,8 @@ def score_with_ollama(
 
         try:
             data = response.json()
+            costs.log_tokens("score", "ollama", model, data.get("prompt_eval_count"), data.get("eval_count"),
+                             lead=creator)
             content = (data.get("message") or {}).get("content")
             if data.get("done_reason") == "length":
                 raise ValueError(f"Ollama ran out of output tokens scoring {name}")

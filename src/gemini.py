@@ -18,6 +18,7 @@ import os
 import re
 import time
 
+from src import costs
 from src.enricher import MAX_TOKENS, ScoringUnavailable, build_payload, scoring_prompt, validate_result
 from src.labels import Throttle
 from src.settings import GEMINI_FALLBACK_MODEL, GEMINI_MAX_RETRIES, GEMINI_MODEL, GEMINI_REQUESTS_PER_MINUTE
@@ -80,6 +81,7 @@ def score_with_gemini(
     for index, model in enumerate(models):
         try:
             response = _generate(client, model, contents, config, creator["name"])
+            costs.log_tokens("score", "gemini", model, *costs.gemini_usage(response), lead=creator)
             break
         except _Busy as busy:
             if index + 1 < len(models):

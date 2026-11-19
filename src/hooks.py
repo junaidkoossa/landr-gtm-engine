@@ -16,6 +16,7 @@ import os
 
 import anthropic
 
+from src import costs
 from src.enricher import (
     MAX_TOKENS,
     EFFORT,
@@ -103,6 +104,8 @@ class HookWriter:
         name = creator["name"]
         try:
             message = create_message(self.client, self.build_request(creator, evidence, rules, enrichment, score))
+            costs.log_tokens("hook", "claude", str(getattr(message, "model", None) or self.model),
+                             *costs.claude_usage(message), lead=creator)
             text = reply_text(name, message, "write a hook for")
             hook = json.loads(text or "").get("custom_hook")
             if not isinstance(hook, str) or not hook.strip():

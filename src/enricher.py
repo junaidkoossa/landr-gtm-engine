@@ -5,6 +5,7 @@ import time
 
 import anthropic
 
+from src import costs
 from src.rules import scoring_rules
 from src.scoring import MAX_ADJUSTMENT
 from src.settings import BATCH_MODEL, BATCH_POLL_SECONDS, LIVE_MODEL
@@ -287,6 +288,8 @@ def enrich_creator(
         client = anthropic.Anthropic()
     request = build_request(creator, evidence, rules, with_hook=with_hook)
     response = create_message(client, request)
+    costs.log_tokens("score", "claude", str(getattr(response, "model", None) or request["model"]),
+                     *costs.claude_usage(response), lead=creator)
     return {**parse_response(creator, response, with_hook), "scored_by": request["model"]}
 
 
@@ -335,6 +338,8 @@ def batch_results(
             continue
         result = entry.result
         if result.type == "succeeded":
+            costs.log_tokens("score", "claude", str(getattr(result.message, "model", None) or batch_model()),
+                             *costs.claude_usage(result.message), lead=creator, batch=True)
             try:
                 outcomes[entry.custom_id] = {
                     **parse_response(creator, result.message, with_hook),
