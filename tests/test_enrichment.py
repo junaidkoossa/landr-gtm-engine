@@ -103,9 +103,9 @@ class ExperimentAndSummaryTests(unittest.TestCase):
 
     def test_verdicts(self):
         lower = summarize([], self.report_rows(11, 20))
-        self.assertIn("11 reached 7+ (55%). Verdict: over 50%: lower ENRICH_MIN_SCORE to 5", lower[1])
+        self.assertIn("11 reached the hook cutoff (55%; creators 11/20). Verdict: over 50%: lower the enrich cutoff to 5", lower[1])
         keep = summarize([], self.report_rows(10, 20))
-        self.assertIn("not over 50%: keep ENRICH_MIN_SCORE", keep[1])
+        self.assertIn("not over 50%: keep the enrich cutoff", keep[1])
         small = summarize([], self.report_rows(5, 6))
         self.assertIn("too small to call", small[1])
 
@@ -117,7 +117,8 @@ class ExperimentAndSummaryTests(unittest.TestCase):
             {"score": "4", "email": ""},
         ]
         lines = summarize(store, [])
-        self.assertIn("7+: 3 (2 with an email); 8+: 2 (2 with an email); 9+: 1 (1 with an email)", lines[-2])
+        self.assertIn("4 scored creators: 7+: 3 (2 with an email); 8+: 2 (2 with an email); 9+: 1 (1 with an email)",
+                      lines[-3])
         self.assertIn("1 leads without enrichment, 2 with it", lines[-1])
 
 
@@ -258,7 +259,7 @@ class FlowTests(unittest.TestCase):
         self.assertEqual((report[0]["reached_hook_score"], report[0]["email_found"]), ("yes", "yes"))
         self.assertTrue(any("1 not found in the output" in line for line in logs.output))
         summary = enrichment_report(self.output)
-        self.assertIn("At 7+: 0 before enrichment, 1 after", summary[0])
+        self.assertIn("At the hook cutoff (7+): 0 before enrichment, 1 after", summary[0])
         self.assertIn("0 leads without enrichment, 1 with it", summary[-1])
 
         # Scored again 90 days later: Clay's figures still count and it isn't sent again.

@@ -692,10 +692,14 @@ class HubSpotTests(unittest.TestCase):
         from src.hubspot import CUSTOM_PROPERTIES, create_properties
         exists = Mock(status_code=409)
         created = Mock(status_code=201)
-        responses = [exists, exists] + [created] * (len(CUSTOM_PROPERTIES) - 1)
-        with patch("src.hubspot.requests.post", side_effect=responses):
+        # group exists, first property exists, the rest (and the landr_outcome dropdown) are new
+        responses = [exists, exists] + [created] * len(CUSTOM_PROPERTIES)
+        with patch("src.hubspot.requests.post", side_effect=responses) as post:
             names = create_properties("T")
-        self.assertEqual(len(names), len(CUSTOM_PROPERTIES) - 1)
+        self.assertEqual(len(names), len(CUSTOM_PROPERTIES))
+        outcome = post.call_args_list[-1].kwargs["json"]
+        self.assertEqual((outcome["name"], outcome["type"]), ("landr_outcome", "enumeration"))
+        self.assertIn("bounced", [option["value"] for option in outcome["options"]])
 
 
 if __name__ == "__main__":

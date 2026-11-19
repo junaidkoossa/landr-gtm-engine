@@ -237,7 +237,7 @@ class OllamaPipelineTests(unittest.TestCase):
         client = claude_client()
         results, logs = self.run_pipeline({"SCORING_PROVIDER": "ollama", "ANTHROPIC_API_KEY": "A"}, fake, client)
         self.assertIn("Scoring with Ollama (llama3.1:8b at http://localhost:11434)", logs[0])
-        self.assertIn("Outreach hooks: Claude (claude-sonnet-5-5), only for creators scoring 7 or more", logs[1])
+        self.assertIn("Outreach hooks: Claude (claude-sonnet-5-5), for leads at or above the hook cutoff", logs[1])
         rows = {row["name"]: row for row in results}
         self.assertEqual(rows["Top"]["scored_by"], "llama3.1:8b")
         self.assertEqual(rows["Top"]["hook_by"], "claude-sonnet-5-5")
