@@ -12,6 +12,18 @@
   ],
   "evaluation_criteria": "Each lead is scored per LANDR product in code (see 'products'): Mastering (AI mastering plugin and subscriptions) on release volume, recency, no mastering credit, self-releasing and mid-size reach; Distribution on self-releasing, a competitor distributor, promoting their releases (out now, pre-save links, link in bio), release volume, recency and Spotify listeners; Samples supplier on making sample packs, catalogue size, a recent pack, selling direct and followers; Plugins (LANDR's own) on producing or mixing for others, production content, using third-party plugins, release volume and recency. Review the best product's score. Treat missing figures as unknown, not zero.",
   "activation_min_score": 1,
+  "cutoffs": {
+    "creator": {
+      "enrich": 6,
+      "hook": 7,
+      "hubspot": 7
+    },
+    "label": {
+      "enrich": 6,
+      "hook": 7,
+      "hubspot": 7
+    }
+  },
   "products": {
     "mastering": {
       "releases": {

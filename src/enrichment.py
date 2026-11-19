@@ -28,6 +28,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+from src.cutoffs import TARGET_TYPES, Cutoffs, target_of
 from src.settings import (
     CLAY_EXPERIMENT_SAMPLE,
     CLAY_SCORE_MAX,
@@ -35,7 +36,6 @@ from src.settings import (
     CLAY_EXPERIMENT_THRESHOLD,
     ENRICH_MIN_SCORE,
     ENRICHMENT_PROVIDER,
-    HOOK_MIN_SCORE,
     HUBSPOT_MIN_SCORE,
 )
 from src.scoring import PRODUCTS, yes_no
@@ -354,60 +354,83 @@ def _int(value: object) -> int | None:
 
 
 def summarize(store_rows: list[dict[str, object]], report_rows: list[dict[str, object]],
-              hook_score: int = HOOK_MIN_SCORE, hubspot_score: int = HUBSPOT_MIN_SCORE) -> list[str]:
-    """The enrichment summary, one line per point."""
+              cutoffs: Cutoffs | None = None) -> list[str]:
+    """The enrichment summary, one line per point, with creators and labels split out so
+    each type's cutoffs can be set from its own numbers."""
+    cutoffs = cutoffs or Cutoffs()
+
+    def hook_at(row: dict[str, object]) -> int:
+        return cutoffs.for_row(row, "hook")
+
+    def by_type(rows: list[dict[str, object]], count) -> str:
+        parts = []
+        for target in TARGET_TYPES:
+            group = [r for r in rows if target_of(r) == target]
+            if group:
+                parts.append(f"{target}s {count(group)}")
+        return "; ".join(parts)
+
     lines: list[str] = []
+    hook_text = cutoffs.describe("hook")
     enriched = [r for r in report_rows if _int(r["score_before"]) is not None]
     regular = [r for r in enriched if r.get("experiment") != "yes"]
     if regular:
-        before = sum(1 for r in regular if _int(r["score_before"]) >= hook_score)
-        after = sum(1 for r in regular if _int(r["score_after"]) >= hook_score)
+        before = sum(1 for r in regular if _int(r["score_before"]) >= hook_at(r))
+        after = sum(1 for r in regular if _int(r["score_after"]) >= hook_at(r))
         emails = sum(1 for r in regular if r.get("email_found") == "yes")
         change = sum(_int(r["score_after"]) - _int(r["score_before"]) for r in regular) / len(regular)
         lines.append(
-            f"Enriched leads: {len(regular)}. At {hook_score}+: {before} before enrichment, {after} after. "
-            f"Emails found by enrichment: {emails}. Average score change: {change:+.1f}."
+            f"Enriched leads: {len(regular)}. At the hook cutoff ({hook_text}+): {before} before enrichment, "
+            f"{after} after. Emails found by enrichment: {emails}. Average score change: {change:+.1f}."
         )
     else:
         lines.append("Enriched leads: none yet.")
 
     experiment = [r for r in enriched if r.get("experiment") == "yes"]
     if experiment:
-        reached = sum(1 for r in experiment if _int(r["score_after"]) >= hook_score)
+        reached = sum(1 for r in experiment if _int(r["score_after"]) >= hook_at(r))
         share = reached / len(experiment)
         if len(experiment) < CLAY_EXPERIMENT_SAMPLE:
             verdict = f"too small to call (fewer than {CLAY_EXPERIMENT_SAMPLE} leads)"
         elif share > CLAY_EXPERIMENT_THRESHOLD:
-            verdict = f"over {CLAY_EXPERIMENT_THRESHOLD:.0%}: lower ENRICH_MIN_SCORE to {CLAY_EXPERIMENT_SCORE}"
+            verdict = f"over {CLAY_EXPERIMENT_THRESHOLD:.0%}: lower the enrich cutoff to {CLAY_EXPERIMENT_SCORE}"
         else:
-            verdict = f"not over {CLAY_EXPERIMENT_THRESHOLD:.0%}: keep ENRICH_MIN_SCORE where it is"
+            verdict = f"not over {CLAY_EXPERIMENT_THRESHOLD:.0%}: keep the enrich cutoff where it is"
+        split = by_type(experiment, lambda g: f"{sum(1 for r in g if _int(r['score_after']) >= hook_at(r))}/{len(g)}")
         lines.append(
             f"Experiment (leads scored {CLAY_EXPERIMENT_SCORE}): {len(experiment)} enriched, "
-            f"{reached} reached {hook_score}+ ({share:.0%}). Verdict: {verdict}."
+            f"{reached} reached the hook cutoff ({share:.0%}; {split}). Verdict: {verdict}."
         )
 
     scored = [r for r in store_rows if score_of(r) is not None]
-    spread = []
-    for cutoff in (7, 8, 9):
-        at = [r for r in scored if score_of(r) >= cutoff]
-        with_email = sum(1 for r in at if str(r.get("email") or "").strip())
-        spread.append(f"{cutoff}+: {len(at)} ({with_email} with an email)")
     waiting = sum(1 for r in store_rows if is_awaiting(r))
-    lines.append(f"Score spread over {len(scored)} scored leads: " + "; ".join(spread)
-                 + f". Waiting for Clay: {waiting}.")
+    for target in TARGET_TYPES:
+        group = [r for r in scored if target_of(r) == target]
+        if not group and target == "label":
+            continue
+        spread = []
+        for cutoff in (7, 8, 9):
+            at = [r for r in group if score_of(r) >= cutoff]
+            with_email = sum(1 for r in at if str(r.get("email") or "").strip())
+            spread.append(f"{cutoff}+: {len(at)} ({with_email} with an email)")
+        lines.append(f"Score spread over {len(group)} scored {target}s: " + "; ".join(spread) + ".")
+    lines.append(f"Waiting for Clay: {waiting}.")
 
-    def qualifies(score: int | None, email: bool) -> bool:
-        return score is not None and score >= hubspot_score and email
+    def qualifies(row: dict[str, object], score: int | None, email: bool) -> bool:
+        return score is not None and score >= cutoffs.for_row(row, "hubspot") and email
 
     without = with_ = 0
     for row in scored:
         has_email = bool(str(row.get("email") or "").strip())
         own_email = has_email and row.get("email_source") in ("", None, "input")
         before = _int(row.get("score_before_enrichment"))
-        without += qualifies(before if before is not None else score_of(row), own_email)
-        with_ += qualifies(score_of(row), has_email) and not is_awaiting(row)
+        without += qualifies(row, before if before is not None else score_of(row), own_email)
+        with_ += qualifies(row, score_of(row), has_email) and not is_awaiting(row)
+    explored = [r for r in store_rows if r.get("exploration")]
     lines.append(
-        f"HubSpot ({hubspot_score}+ with an email): {without} leads without enrichment, {with_} with it."
+        f"HubSpot ({cutoffs.describe('hubspot')}+ with an email): {without} leads without enrichment, "
+        f"{with_} with it. Exploration sample below the cutoff: {len(explored)}"
+        + (f" ({by_type(explored, len)})" if explored else "") + "."
     )
     return lines
 

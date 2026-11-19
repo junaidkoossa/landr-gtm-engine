@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from src.cutoffs import validate_cutoffs
 from src.scoring import default_products, validate_products
 
 REQUIRED_RULE_FIELDS = (
@@ -43,6 +44,7 @@ def load_vertical_rules(path: str | Path) -> dict[str, object]:
     # "scoring" (the single creator/label score) was replaced by per-product scores.
     rules.pop("scoring", None)
     rules["products"] = validate_products(rules.get("products", default_products()))
+    rules["cutoffs"] = validate_cutoffs(rules.get("cutoffs"))
     version = rules.setdefault("scoring_version", "")
     if not isinstance(version, str):
         raise ValueError(f"{path} field 'scoring_version' must be a string")

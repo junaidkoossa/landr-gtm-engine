@@ -10,7 +10,8 @@ from dotenv import load_dotenv
 
 from src import costs
 from src.activate import WEBHOOK_FORMATS, send_to_webhook
-from src.db import sync_quietly
+from src.cutoffs import Cutoffs
+from src.db import outcomes_path, sync_quietly
 from src.collect import MissingCredentials, UnsupportedSource, collect_evidence, is_label
 from src.email_finders import EmailFinder, EmailLookupError, lead_domain
 from src.enrichment import (
@@ -28,10 +29,8 @@ from src.enrichment import (
     apply_figures,
     cache_path,
     clay_csv_path,
-    enrich_min_score,
     enrichment_provider,
     final_clay_score,
-    hubspot_min_score,
     is_awaiting,
     pick_experiment,
     read_clay_export,
@@ -57,9 +56,9 @@ from src.enricher import (
     wait_for_batch,
 )
 from src.guard import suspicious_phrases
-from src.hooks import HookWriter, hook_min_score, hook_provider
+from src.hooks import HookWriter, hook_provider
 from src.hubspot import access_token as hubspot_token
-from src.hubspot import upsert_contacts
+from src.hubspot import fetch_outcomes, upsert_contacts
 from src.ingest import load_creators
 from src.matching import name_key
 from src.scoring import LABEL_PRODUCTS, PRODUCTS, final_score, score_products
@@ -67,6 +66,7 @@ from src.instagram import credentials as instagram_credentials
 from src.social import instagram_handle, tiktok_handle
 from src.tiktok import TikTokJobs
 from src.tiktok import api_token as brightdata_token
+from src.tuning import FeatureLog, features_path, mark_exploration, merge_outcomes, write_fit_report
 from src.rules import load_vertical_rules
 from src.settings import (
     BATCH_POLL_SECONDS,
@@ -165,13 +165,16 @@ class Run:
         self.clay_cache = EvidenceCache(self.files["clay_cache"])
         self.report = EnrichmentReport(self.files["report"])
         self.rules = rules
+        self.cutoffs = Cutoffs(rules)
+        self.features = FeatureLog(features_path(output_path), rules.get("products"))
         self.client = client
         self.provider = provider
         # Scoring never writes the hook: Claude writes it once the score is final
         # (write_hooks), for top-scored creators only. "none": no hooks.
         self.hooks = hooks
         self.with_hook = False
-        self.hook_writer = HookWriter(client) if hooks == "claude" else None
+        # The hook cutoff is per target type, so write_hooks decides who gets one.
+        self.hook_writer = HookWriter(client, min_score=1) if hooks == "claude" else None
         # Each scored creator's full evidence, for its hook and for Clay's re-score.
         self.records: dict[str, dict[str, object]] = {}
         self.poll_seconds = poll_seconds
@@ -203,6 +206,7 @@ class Run:
         self.failures.clear(record)
         self.records[creator_key(row)] = {**record, **enrichment, "score": score}
         self.scored.append(row)
+        self.features.add(row)
 
     def take_clay_score(self, record: dict[str, object], previous: dict[str, object],
                         clay_scores: dict[str, int]) -> None:
@@ -231,6 +235,7 @@ class Run:
         )
         self.records[creator_key(row)] = {**record, **enrichment, "score": score}
         self.scored.append(row)
+        self.features.add(row)
         self.store.save()
 
     def fail(self, record: dict[str, object], error: object, permanent: bool = False) -> None:
@@ -244,16 +249,20 @@ class Run:
         self.reviews.save()
         self.clay_cache.save()
         self.report.save()
+        self.features.save()
 
     def write_hooks(self, rows: list[dict[str, object]]) -> int:
-        """Claude's hook for each row whose score is final and at least HOOK_MIN_SCORE
-        (rows waiting for Clay get theirs after the import). Returns how many were written."""
+        """Claude's hook for each row whose score is final and at least its hook cutoff, and
+        for the exploration sample (rows waiting for Clay get theirs after the import).
+        Returns how many were written."""
         if not self.hook_writer:
             return 0
         written = 0
         for row in rows:
             score = score_of(row)
-            if is_awaiting(row) or score is None or score < self.hook_writer.min_score:
+            if is_awaiting(row) or score is None:
+                continue
+            if score < self.cutoffs.for_row(row, "hook") and not row.get("exploration"):
                 continue
             record = self.records.get(creator_key(row)) or record_from_row(row)
             creator = {field: row.get(field, "") for field in CREATOR_FIELDS}
@@ -349,7 +358,6 @@ def send_to_clay(run: Run, rows: list[dict[str, object]], webhook_url: str | Non
 def find_emails(run: Run, rows: list[dict[str, object]], finder: EmailFinder) -> list[dict[str, object]]:
     """Look up an email for each lead without one; return the leads that got one. The score
     doesn't change (Apollo and Hunter only find emails)."""
-    hook_score = hook_min_score()
     found: list[dict[str, object]] = []
     failures_in_a_row = 0
     for row in rows:
@@ -379,7 +387,7 @@ def find_emails(run: Run, rows: list[dict[str, object]], finder: EmailFinder) ->
             found.append(row)
         else:
             row["enrichment_status"] = NOT_FOUND
-        run.report.add(row, score_of(row) or 0, hook_score)
+        run.report.add(row, score_of(row) or 0, run.cutoffs.for_row(row, "hook"))
     logger.info("%s found %d emails for %d leads", finder.provider.title(), len(found), len(rows))
     return found
 
@@ -388,10 +396,9 @@ def enrich_leads(
     run: Run, provider: str, clay_webhook_url: str | None = None,
     experiment: bool = False, finder: EmailFinder | None = None,
 ) -> list[dict[str, object]]:
-    """Enrich every lead at or above ENRICH_MIN_SCORE that isn't enriched yet, plus, with
+    """Enrich every lead at or above its enrich cutoff that isn't enriched yet, plus, with
     Clay, leads with limited data and the experiment sample. Returns leads that got an
     email now (Apollo and Hunter)."""
-    cutoff = enrich_min_score()
     rows = list(run.store.rows.values())
     ready = []
     for row in rows:
@@ -399,7 +406,7 @@ def enrich_leads(
         if score is None or status not in READY:
             continue
         # Clay also gets leads whose best product rests on few checked signals.
-        if score >= cutoff or (provider == "clay" and row.get("limited_data")):
+        if score >= run.cutoffs.for_row(row, "enrich") or (provider == "clay" and row.get("limited_data")):
             ready.append(row)
         elif not status:
             row["enrichment_status"] = BELOW_CUTOFF
@@ -448,16 +455,17 @@ def _send_webhook(store, rows, min_score, webhook_url, webhook_format) -> tuple[
     return sent, failed
 
 
-def _sync_hubspot(store, rows, min_score, token) -> tuple[int, int]:
+def _sync_hubspot(store, rows, cutoffs: Cutoffs, token) -> tuple[int, int]:
     """Upsert contacts by email. Unlike the webhook, a re-scored creator is synced again,
-    so HubSpot always has the latest score (an upsert updates the same contact)."""
+    so HubSpot always has the latest score (an upsert updates the same contact). Leads in
+    the exploration sample go even though they're below the cutoff."""
     to_sync = []
     for row in rows:
         if not token:
             store.set_hubspot_status(row, NOT_CONFIGURED)
         elif is_awaiting(row):
             store.set_hubspot_status(row, AWAITING_ENRICHMENT)
-        elif int(row["score"]) < min_score:
+        elif int(row["score"]) < cutoffs.for_row(row, "hubspot") and not row.get("exploration"):
             store.set_hubspot_status(row, BELOW_MIN_SCORE)
         elif not str(row.get("email") or "").strip():
             store.set_hubspot_status(row, NO_EMAIL)
@@ -483,14 +491,14 @@ def deliver(
     webhook_url: str | None,
     webhook_format: str,
     hubspot: str | None = None,
-    hubspot_min: int | None = None,
+    cutoffs: Cutoffs | None = None,
 ) -> dict[str, int]:
-    """Send qualifying rows to the webhook (min_score) and to HubSpot (HUBSPOT_MIN_SCORE),
-    recording each row's status. Rows waiting for Clay are held back."""
+    """Send qualifying rows to the webhook (min_score) and to HubSpot (each lead's hubspot
+    cutoff, plus the exploration sample), recording each row's status. Rows waiting for
+    Clay are held back."""
     unique = list({id(row): row for row in rows}.values())
-    hubspot_min = hubspot_min_score() if hubspot_min is None else hubspot_min
     sent, webhook_failed = _send_webhook(store, unique, min_score, webhook_url, webhook_format)
-    synced, hubspot_failed = _sync_hubspot(store, unique, hubspot_min, hubspot)
+    synced, hubspot_failed = _sync_hubspot(store, unique, cutoffs or Cutoffs(), hubspot)
     return {
         "webhook_sent": sent,
         "webhook_failed": webhook_failed,
@@ -539,8 +547,7 @@ def prepare_models(provider: str | None, client: anthropic.Anthropic | None):
                     "HOOK_PROVIDER=none (no hooks)"
                 )
             client = anthropic.Anthropic()
-        logger.info("Outreach hooks: Claude (%s), only for creators scoring %d or more",
-                    live_model(), hook_min_score())
+        logger.info("Outreach hooks: Claude (%s), for leads at or above the hook cutoff", live_model())
     else:
         logger.info("Outreach hooks: none (HOOK_PROVIDER=none)")
     return provider, client, hooks, live_only
@@ -585,8 +592,9 @@ def run_pipeline(
     finder = None
     if enrich_with != "clay":
         finder = email_finder or EmailFinder(enrich_with)
-    logger.info("Enrichment: %s, for leads scoring %d or more; HubSpot gets leads scoring %d or more",
-                enrich_with.title(), enrich_min_score(), hubspot_min_score())
+    cutoffs = Cutoffs(rules)
+    logger.info("Enrichment: %s, for leads scoring %s or more; hooks at %s; HubSpot gets leads scoring %s or more",
+                enrich_with.title(), cutoffs.describe("enrich"), cutoffs.describe("hook"), cutoffs.describe("hubspot"))
     if not os.getenv("YOUTUBE_API_KEY") and any(c.get("youtube_url") for c in creators):
         raise RuntimeError("The input has YouTube channels; set YOUTUBE_API_KEY first")
 
@@ -716,19 +724,22 @@ def run_pipeline(
 
     found_emails = enrich_leads(run, enrich_with, clay_webhook_url, clay_experiment, finder)
     run.save()
-    hooks_written = run.write_hooks(run.scored)
+    outgoing = list({id(row): row for row in run.scored + new_emails + found_emails}.values())
+    explored = mark_exploration(outgoing, lambda row: run.cutoffs.for_row(row, "hubspot"))
+    hooks_written = run.write_hooks(outgoing)
     counts = deliver(
         run.store,
-        run.scored + new_emails + found_emails,
+        outgoing,
         rules["activation_min_score"],
         webhook_url,
         webhook_format,
         hubspot,
+        run.cutoffs,
     )
     run.save()
     run.store.save_unsent(run.files["unsent"])
     write_summary(run)
-    logger.info("Hooks written: %d", hooks_written)
+    logger.info("Hooks written: %d; exploration sample: %d leads below the HubSpot cutoff", hooks_written, explored)
     logger.info(
         "Scored %d creators (webhook: %d sent, %d failed; HubSpot: %d synced, %d failed); "
         "%d up to date; %d duplicates in input; %d failed this run; "
@@ -754,7 +765,7 @@ def resend_unsent(
     rules = load_vertical_rules(rules_path)
     store = CreatorStore(output_path)
     min_score = rules["activation_min_score"]
-    hubspot_min = hubspot_min_score()
+    cutoffs = Cutoffs(rules)
     webhook_rows = [
         row for row in store.rows.values()
         if webhook_url and row.get("webhook_status") in (FAILED, NO_WEBHOOK)
@@ -764,7 +775,7 @@ def resend_unsent(
         if hubspot and row.get("hubspot_status") in (FAILED, NO_EMAIL, NOT_CONFIGURED, AWAITING_ENRICHMENT, "")
     ]
     sent, webhook_failed = _send_webhook(store, webhook_rows, min_score, webhook_url, webhook_format)
-    synced, hubspot_failed = _sync_hubspot(store, hubspot_rows, hubspot_min, hubspot)
+    synced, hubspot_failed = _sync_hubspot(store, hubspot_rows, cutoffs, hubspot)
     store.save()
     store.save_unsent(run_files(output_path)["unsent"])
     logger.info(
@@ -781,20 +792,19 @@ def resend_unsent(
 
 def write_summary(run: Run) -> list[str]:
     """Log the enrichment summary and save it next to the output CSV."""
-    lines = summarize(list(run.store.rows.values()), list(run.report.rows.values()),
-                      hook_min_score(), hubspot_min_score())
+    lines = summarize(list(run.store.rows.values()), list(run.report.rows.values()), run.cutoffs)
     for line in lines:
         logger.info("%s", line)
     run.files["summary"].write_text("\n".join(lines) + "\n", encoding="utf-8")
     return lines
 
 
-def enrichment_report(output_path: str | Path) -> list[str]:
+def enrichment_report(output_path: str | Path, rules_path: str | Path | None = None) -> list[str]:
     """The enrichment summary for what's in the output CSV and report so far (no scoring)."""
     store = CreatorStore(output_path)
     report = EnrichmentReport(run_files(output_path)["report"])
-    lines = summarize(list(store.rows.values()), list(report.rows.values()),
-                      hook_min_score(), hubspot_min_score())
+    rules = load_vertical_rules(rules_path) if rules_path and Path(rules_path).exists() else None
+    lines = summarize(list(store.rows.values()), list(report.rows.values()), Cutoffs(rules))
     path = run_files(output_path)["summary"]
     if path.parent.exists():
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -819,7 +829,6 @@ def import_clay(
     rules = load_vertical_rules(rules_path)
     provider, client, hooks, _ = prepare_models(provider, client)
     run = Run(output_path, rules, client, BATCH_POLL_SECONDS, provider, hooks)
-    hook_score = hook_min_score()
     exported = read_clay_export(export_path)
     unmatched = not_waiting = failed = clay_scored = 0
     imported: list[dict[str, object]] = []
@@ -862,11 +871,13 @@ def import_clay(
         new["enrichment_status"], new["enrichment_returned_at"] = ENRICHED, now_iso()
         new["score_before_enrichment"] = before
         run.clay_cache.pop(key)
-        run.report.add(new, before, hook_score)
+        run.report.add(new, before, run.cutoffs.for_row(new, "hook"))
         imported.append(new)
     run.save()
+    mark_exploration(imported, lambda row: run.cutoffs.for_row(row, "hubspot"))
     hooks_written = run.write_hooks(imported)
-    counts = deliver(run.store, imported, rules["activation_min_score"], webhook_url, webhook_format, hubspot)
+    counts = deliver(run.store, imported, rules["activation_min_score"], webhook_url, webhook_format, hubspot,
+                     run.cutoffs)
     run.save()
     run.store.save_unsent(run.files["unsent"])
     logger.info(
@@ -929,6 +940,16 @@ def main(argv: list[str] | None = None) -> int:
         help="print the enrichment summary (scores before and after, the experiment, score spread)",
     )
     parser.add_argument(
+        "--sync-outcomes",
+        action="store_true",
+        help="read the landr_outcome property back from HubSpot into data/outcomes.csv (no scoring)",
+    )
+    parser.add_argument(
+        "--fit-report",
+        action="store_true",
+        help="compare replies with each signal, product and score band, and suggest weight changes",
+    )
+    parser.add_argument(
         "--resend-unsent",
         action="store_true",
         help="only retry the webhook and HubSpot for creators not yet delivered (no scoring)",
@@ -944,7 +965,25 @@ def main(argv: list[str] | None = None) -> int:
     clay_webhook_url = os.getenv("CLAY_WEBHOOK_URL") or None
     if args.enrichment_report:
         try:
-            print("\n".join(enrichment_report(args.output)))
+            print("\n".join(enrichment_report(args.output, args.rules)))
+        except (OSError, ValueError) as error:
+            parser.exit(1, f"error: {error}\n")
+        return 0
+    if args.sync_outcomes:
+        if not hubspot:
+            parser.exit(1, "error: set HUBSPOT_ACCESS_TOKEN to read outcomes from HubSpot\n")
+        try:
+            counts = merge_outcomes(outcomes_path(args.output), fetch_outcomes(hubspot))
+            sync_quietly(args.output, None, args.rules)
+        except (OSError, ValueError, requests.RequestException) as error:
+            parser.exit(1, f"error: {error}\n")
+        print(f"Outcomes from HubSpot: {counts['updated']} updated, {counts['added']} added, "
+              f"{counts['skipped']} skipped, in {outcomes_path(args.output)}")
+        return 0
+    if args.fit_report:
+        try:
+            rules = load_vertical_rules(args.rules)
+            print("\n".join(write_fit_report(args.output, products=rules["products"])))
         except (OSError, ValueError) as error:
             parser.exit(1, f"error: {error}\n")
         return 0

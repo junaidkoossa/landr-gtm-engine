@@ -318,6 +318,8 @@ def _sync_outcomes(connection: sqlite3.Connection, store: CreatorStore, outcomes
     by_email = {str(row.get("email") or "").strip().lower(): key for key, row in store.rows.items() if row.get("email")}
     unmatched = 0
     for outcome in outcomes:
+        if _yes(outcome.get("bounced")):
+            continue  # the email never arrived, so it says nothing about the lead
         key = match_outcome(store, by_email, outcome)
         if key is None or not outcome.get("sent_at"):
             unmatched += 1

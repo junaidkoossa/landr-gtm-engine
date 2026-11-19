@@ -53,7 +53,16 @@ CUSTOM_PROPERTIES = {
     "landr_clay_score_plugins": ("LANDR Clay score: Plugins", "number", "number", "clay_score_plugins"),
     "landr_big_act_test": ("LANDR big-act test", "string", "text", "big_act_test"),
     "landr_scoring_version": ("LANDR scoring version", "string", "text", "scoring_version"),
+    "landr_exploration": ("LANDR exploration sample", "string", "text", "exploration"),
 }
+# Set by you (or a workflow) once you know how a contact answered; read back by
+# --sync-outcomes. The engine never writes it.
+OUTCOME_PROPERTY = "landr_outcome"
+OUTCOME_OPTIONS = ("no_reply", "replied", "interested", "converted", "bounced")
+# When the contact was last emailed, first one found (sent_at in the outcomes file).
+SENT_AT_PROPERTIES = ("hs_email_last_send_date", "notes_last_contacted", "lastmodifieddate")
+SEARCH_LIMIT = 100
+SEARCH_REQUESTS_PER_SECOND = 4
 
 
 def access_token() -> str | None:
@@ -152,10 +161,21 @@ def create_properties(token: str) -> list[str]:
     )
     if group.status_code != 409:
         group.raise_for_status()
-    for name, (label, kind, field_type, _) in CUSTOM_PROPERTIES.items():
+    definitions = [
+        {"name": name, "label": label, "type": kind, "fieldType": field_type, "groupName": PROPERTY_GROUP}
+        for name, (label, kind, field_type, _) in CUSTOM_PROPERTIES.items()
+    ]
+    definitions.append({
+        "name": OUTCOME_PROPERTY, "label": "LANDR outcome", "type": "enumeration", "fieldType": "select",
+        "groupName": PROPERTY_GROUP,
+        "options": [{"label": option.replace("_", " ").capitalize(), "value": option, "displayOrder": index}
+                    for index, option in enumerate(OUTCOME_OPTIONS)],
+    })
+    for definition in definitions:
+        name = definition["name"]
         response = requests.post(
             f"{API_URL}/crm/v3/properties/contacts",
-            json={"name": name, "label": label, "type": kind, "fieldType": field_type, "groupName": PROPERTY_GROUP},
+            json=definition,
             headers=_headers(token),
             timeout=TIMEOUT,
         )
@@ -164,6 +184,40 @@ def create_properties(token: str) -> list[str]:
         response.raise_for_status()
         created.append(name)
     return created
+
+
+def fetch_outcomes(token: str) -> list[dict[str, str]]:
+    """Every contact with landr_outcome set: email, outcome and sent_at (YYYY-MM-DD)."""
+    contacts: list[dict[str, str]] = []
+    after: str | None = None
+    while True:
+        body: dict[str, object] = {
+            "filterGroups": [{"filters": [{"propertyName": OUTCOME_PROPERTY, "operator": "HAS_PROPERTY"}]}],
+            "properties": ["email", OUTCOME_PROPERTY, *SENT_AT_PROPERTIES],
+            "limit": SEARCH_LIMIT,
+        }
+        if after:
+            body["after"] = after
+        for attempt in range(2):
+            response = requests.post(f"{API_URL}/crm/v3/objects/contacts/search", json=body,
+                                     headers=_headers(token), timeout=TIMEOUT)
+            if response.status_code != 429 or attempt:
+                break
+            time.sleep(float(response.headers.get("Retry-After", 2)))
+        response.raise_for_status()
+        data = response.json()
+        for result in data.get("results", []):
+            properties = result.get("properties") or {}
+            sent_at = next((str(properties[p]) for p in SENT_AT_PROPERTIES if properties.get(p)), "")
+            contacts.append({
+                "email": str(properties.get("email") or "").strip().lower(),
+                "outcome": str(properties.get(OUTCOME_PROPERTY) or "").strip(),
+                "sent_at": sent_at[:10],
+            })
+        after = ((data.get("paging") or {}).get("next") or {}).get("after")
+        if not after:
+            return contacts
+        time.sleep(1 / SEARCH_REQUESTS_PER_SECOND)
 
 
 def main() -> int:

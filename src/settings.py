@@ -31,7 +31,8 @@ OLLAMA_TIMEOUT_SECONDS = 300
 HOOK_MIN_SCORE = 7
 
 # Enrichment (src/enrichment.py). ENRICHMENT_PROVIDER: "clay" (the default), "apollo" or
-# "hunter". Leads scoring at least ENRICH_MIN_SCORE are enriched.
+# "hunter". Leads scoring at least ENRICH_MIN_SCORE are enriched. The three *_MIN_SCORE
+# values here are defaults: the rules file's "cutoffs" set them per creator and label.
 ENRICHMENT_PROVIDER = "clay"
 ENRICH_MIN_SCORE = 6
 # Only leads scoring at least this (and with an email) go to HubSpot.
@@ -52,6 +53,19 @@ CLAY_SCORE_MAX = 10
 # engineer already). This share of those acts, picked by a stable hash of the lead, get
 # the full points instead and are marked big_act_test, to test that against replies.
 BIG_ACT_TEST_SHARE = 0.10
+# Exploration sample: this share of the leads below the HubSpot cutoff that have an email
+# go to HubSpot anyway (with a hook), so you learn how lower-rated leads answer. Leads
+# scored SPOT_CHECK_SCORE are reported as their own spot-check group.
+EXPLORE_SHARE = 0.05
+SPOT_CHECK_SCORE = 5
+# --fit-report suggests weight changes only with at least FIT_MIN_CONTACTED contacted
+# leads and FIT_MIN_REPLIES replies, for signals with FIT_MIN_GROUP leads on each side
+# whose reply rate is at least FIT_RAISE_LIFT (or at most FIT_LOWER_LIFT) times the average.
+FIT_MIN_CONTACTED = 200
+FIT_MIN_REPLIES = 30
+FIT_MIN_GROUP = 10
+FIT_RAISE_LIFT = 1.5
+FIT_LOWER_LIFT = 0.67
 # Apollo and Hunter lookups, one at a time (each one can use a credit).
 EMAIL_LOOKUPS_PER_SECOND = 1
 

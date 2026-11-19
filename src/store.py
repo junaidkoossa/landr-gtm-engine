@@ -82,6 +82,7 @@ OUTPUT_COLUMNS = (
     "enrichment_provider",
     "enrichment_status",
     "enrichment_experiment",
+    "exploration",
     "enrichment_sent_at",
     "enrichment_returned_at",
     "needs_review",
