@@ -32,6 +32,7 @@
       "source": "discogs",
       "kind": "artist",
       "params": {"label": "Not On Label", "format": "File"},
+      "self_released": true,
       "per_query": 10,
       "max_leads": 40,
       "products": ["Distribution", "Mastering"]

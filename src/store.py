@@ -28,6 +28,7 @@ OUTPUT_COLUMNS = (
     "email",
     "instagram",
     "tiktok",
+    "lead_source",
     "page_title",
     "storefront_links",
     "release_signals",

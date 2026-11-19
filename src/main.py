@@ -672,6 +672,9 @@ def run_pipeline(
             run.reviews.add(creator, match)
         if found:  # figures enrichment found earlier still count
             evidence = apply_figures(evidence, stored_figures(found[1]))
+        if creator.get("self_released") and not evidence.get("self_released"):
+            # Discovery found them on Discogs' "Not On Label" (src/discover.py).
+            evidence = {**evidence, "self_released": creator["self_released"]}
         queue.append({
             **creator,
             **evidence,

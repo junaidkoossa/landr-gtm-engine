@@ -156,7 +156,7 @@ class InputFileTests(unittest.TestCase):
 
             with path.open(encoding="utf-8-sig", newline="") as source:
                 reader = csv.DictReader(source)
-                self.assertEqual(reader.fieldnames[-2:], ["lead_source", "product_fit"])
+                self.assertEqual(reader.fieldnames[-3:], ["lead_source", "product_fit", "self_released"])
                 rows = list(reader)
             self.assertEqual(rows[0]["email"], "me@mine.ca")
             self.assertEqual([row["lead_source"] for row in rows], ["input", "discovered:self-released"])
@@ -188,6 +188,47 @@ class InputFileTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "discogs or musicbrainz"):
                 discover.load_config(path)
         discover.load_config(Path(__file__).parent.parent / "config" / "discovery.json")
+
+
+class ScoringHookupTests(unittest.TestCase):
+    def test_social_triggers_feed_product_signals(self):
+        from src.scoring import detect_signals
+        found = detect_signals("New Drake type beat, cooked up in FL Studio. Beats for sale!",
+                               ["https://www.distrokid.com/hyperfollow/x"])
+        self.assertIn("producer_engineer", found)
+        self.assertIn("production_content", found)
+        self.assertIn("distributor:distrokid", found)
+        self.assertIn("producer_engineer", detect_signals("New drop", ["https://www.beatstars.com/maple"]))
+        self.assertEqual(detect_signals("Out with the release today", []), [])
+
+    def test_discovered_self_release_is_scored_and_lead_source_kept(self):
+        import json
+
+        from tests.test_engine import NoEmails, RULES, SCRAPE_OK, enrichment
+        from src.main import run_pipeline
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "rules.json").write_text(json.dumps(RULES))
+            (root / "input.csv").write_text(
+                "name,target_type,website_url,lead_source,product_fit,self_released\n"
+                "Found,creator,https://found.example,discovered:self-released,Distribution,yes\n"
+                "Mine,creator,https://mine.example,,,\n")
+
+            with (
+                patch("src.main.collect_evidence", return_value={**SCRAPE_OK, "product_signals": []}),
+                patch("src.main.enrich_creator", side_effect=lambda c, *a, **k: enrichment(0)),
+            ):
+                rows = run_pipeline(root / "input.csv", root / "rules.json",
+                                    root / "out.csv", client=object(), enrichment="apollo",
+                                    email_finder=NoEmails())
+            by_name = {row["name"]: row for row in rows}
+            self.assertIn("self-released 3/3", by_name["Found"]["product_breakdowns"])
+            self.assertNotIn("self-released 3/3", by_name["Mine"]["product_breakdowns"])
+            with (root / "out.csv").open(encoding="utf-8", newline="") as source:
+                stored = {row["name"]: row for row in csv.DictReader(source)}
+            self.assertEqual(stored["Found"]["lead_source"], "discovered:self-released")
+            self.assertEqual(stored["Mine"]["lead_source"], "input")
 
 
 if __name__ == "__main__":

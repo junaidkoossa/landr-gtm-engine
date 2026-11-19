@@ -13,6 +13,8 @@ Columns (only name and target_type are required, plus at least one link):
 - lead_source: "input" for rows you add, "discovered:<search>" for rows added by
   python -m src.discover (blank is read as "input").
 - product_fit: the LANDR products a discovered lead points to (optional).
+- self_released: "yes" when discovery found the lead's releases on Discogs' "Not On
+  Label" (self-released); it feeds the self_released scoring signal.
 
 Older files with a single website_url column still work: a YouTube, Instagram or TikTok
 link there is moved to its own column when it's read.
@@ -26,7 +28,7 @@ from src.youtube import is_youtube_url
 
 REQUIRED_COLUMNS = ("name", "target_type")
 LINK_COLUMNS = ("website_url", "youtube_url", "storefront_url", "instagram", "tiktok")
-DISCOVERY_COLUMNS = ("lead_source", "product_fit")
+DISCOVERY_COLUMNS = ("lead_source", "product_fit", "self_released")
 INPUT_COLUMNS = REQUIRED_COLUMNS + LINK_COLUMNS + ("email",)
 logger = logging.getLogger(__name__)
 

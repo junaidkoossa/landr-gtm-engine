@@ -12,7 +12,9 @@ for every genre and country listed, and every lead it finds gets:
   label's own Discogs and MusicBrainz pages, plus an email if a label lists one;
 - lead_source "discovered:<search name>" (rows you add yourself are "input");
 - product_fit, the LANDR products the search points to (for example "Distribution;
-  Mastering"), or "Partnership" for a major label.
+  Mastering"), or "Partnership" for a major label;
+- self_released "yes" for searches marked self_released (Discogs' "Not On Label"),
+  which the scoring counts as the self_released signal.
 
 A lead is skipped when it is already in the input or output CSV, or when no link was
 found for it (the pipeline needs at least one). The normal run (python -m src.main)
@@ -112,6 +114,7 @@ def _lead(name: str, kind: str, links: list[str], search: dict, email: str = "")
         email=email,
         lead_source=f"discovered:{search['name']}",
         product_fit="; ".join(search.get("products", [])),
+        self_released="yes" if search.get("self_released") else "",
     )
     return lead
 

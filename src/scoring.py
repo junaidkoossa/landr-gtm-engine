@@ -81,10 +81,14 @@ KEYWORD_SIGNALS = {
     "producer_engineer": (
         "mixing engineer", "mix engineer", "mastering engineer", "audio engineer", "recording engineer",
         "producer", "mixed by", "engineered by", "mixing and mastering", "mix and master",
+        # Beatmakers (Instagram/TikTok triggers): they make beats for others.
+        "beatmaker", "beat maker", "type beat", "type beats", "beats for sale", "buy beats",
     ),
     "production_content": (
         "tutorial", "how to make", "how i made", "beat making", "beatmaking", "cookup", "cook up",
         "making a beat", "plugin review", "gear review", "in the studio", "studio vlog", "sound design",
+        # Showing the process with a DAW (Instagram/TikTok triggers).
+        "beat breakdown", "fl studio", "ableton", "logic pro", "pro tools", "bitwig", "studio one",
     ),
     "third_party_plugins": (
         "vst", "vst3", "plugin", "plugins", "serum", "fabfilter", "waves", "izotope", "soundtoys",
@@ -112,6 +116,8 @@ COMPETITOR_DISTRIBUTORS = {
     "routenote": ("routenote.com", "routenote"),
     "onerpm": ("onerpm.com", "onerpm"),
 }
+# Beat stores: a producer selling beats to artists.
+PRODUCER_HOSTS = ("beatstars.com", "airbit.com", "traktrain.com")
 _PATTERNS = {
     name: re.compile(r"(?<![\w-])(" + "|".join(re.escape(p) for p in phrases) + r")(?![\w-])", re.IGNORECASE)
     for name, phrases in KEYWORD_SIGNALS.items()
@@ -122,6 +128,8 @@ def detect_signals(text: str, links: list[str] | None = None) -> list[str]:
     """Product signals found in a lead's text and links: keyword signal names, plus
     "distributor:<name>" for each competitor distributor linked or named."""
     found = [name for name, pattern in _PATTERNS.items() if pattern.search(text or "")]
+    if "producer_engineer" not in found and any(host in link.lower() for link in links or [] for host in PRODUCER_HOSTS):
+        found.append("producer_engineer")
     haystack = f"{text or ''} {' '.join(links or [])}".lower()
     for name, needles in COMPETITOR_DISTRIBUTORS.items():
         if any(needle in haystack for needle in needles):

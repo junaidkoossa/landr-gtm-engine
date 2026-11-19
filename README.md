@@ -22,7 +22,8 @@ Switching the rules file lets the same workflow evaluate a different customer ve
 | `tiktok` | one link needed | `@handle` or profile URL | Bright Data |
 | `email` | no | Contact email | HubSpot only |
 | `lead_source` | no | `input`, or `discovered:<search>` for rows added by `src.discover` | Tells inputted and discovered leads apart (blank = `input`) |
-| `product_fit` | no | LANDR products a discovered lead points to, or `Partnership` for a major label | Filled by `src.discover` |
+| `product_fit` | no | LANDR products a discovered lead points to, or `Partnership` for a major label | Filled by `src.discover`; a hint for review (the scored `best_product` is what counts) |
+| `self_released` | no | `yes` when discovery found them on Discogs' "Not On Label" | Counts as the self-released signal in scoring |
 
 Every link a row has is used, and the results are combined. A source that fails is
 noted and skipped as long as another source worked. Creators are matched to earlier
@@ -125,12 +126,12 @@ for leads scoring 7 or more.
 | Releases in the last 12 months: 6 / 12 / 24+ | 1 / 2 / 3 |
 | Latest release within 90 / 30 days | 1 / 2 |
 | No mastering credit on their releases (Clay) | 2 |
-| Self-released (Clay, or "self-released" on their page) | 1 |
+| Self-released (Clay, "self-released" on their page, or found self-released by `src.discover`) | 1 |
 | Reach (Spotify listeners or steady views): 10K–1M / over 1M | 2 / 1 |
 
 | Distribution | Points |
 | --- | --- |
-| Self-released | 3 |
+| Self-released (as in Mastering) | 3 |
 | Links to or names a competitor distributor (DistroKid, TuneCore, CD Baby, Amuse, Ditto...) / none found | 2 / 1 |
 | Releases in the last 12 months: 6 / 12+ | 1 / 2 |
 | Latest release within 30 days | 1 |
@@ -146,8 +147,8 @@ for leads scoring 7 or more.
 
 | Plugins | Points |
 | --- | --- |
-| Produces or mixes for others ("mixing engineer", "producer" and so on, or Clay) | 3 |
-| Makes production content: tutorials, beat-making, gear or plugin reviews (or Clay) | 2 |
+| Produces or mixes for others ("mixing engineer", "producer", "beatmaker", "type beat", "beats for sale", a BeatStars/Airbit/Traktrain link, or Clay) | 3 |
+| Makes production content: tutorials, beat-making, beat breakdowns, DAW sessions (FL Studio, Ableton, Logic Pro...), gear or plugin reviews (or Clay) | 2 |
 | Mentions third-party plugins (VST, Serum, FabFilter, Waves...) | 2 |
 | Releases in the last 12 months: 6 / 12+ | 1 / 2 |
 | Latest release within 30 days | 1 |
@@ -159,6 +160,9 @@ predict interest. Points can be changed, and a signal dropped, in the rules file
 - **Unknown counts half.** A signal no source could check earns half its points, so a
   lead is neither buried nor promoted for missing data; the breakdown says "half of N
   counted". Page phrases are found in `product_signals` (`src/scoring.py` lists them).
+  They are read from website text, YouTube titles, and Instagram and TikTok captions
+  and bios, so the social triggers (competitor distributor, beatmaker, production
+  content, self-released) feed the product they point to.
 - **Limited data goes to Clay.** When under 60% of the points our own sources can check
   were checked for the best product (Clay-only signals are left out of that share),
   `limited_data` says so and the lead is sent to Clay whatever its score.
@@ -493,6 +497,8 @@ The saved searches are in `config/discovery.json`:
   label lists one. Leads with no link are skipped, as are leads already in the input
   or output CSV.
 - Labels whose name contains one in `major_labels` stay in, marked `Partnership`.
+- `lead_source` is copied to the scored CSV, so discovered and inputted leads can be
+  compared. Self-released artists get `self_released` = `yes`, which scoring counts.
 - `max_leads` per search and `max_new_leads` per run keep the run short: Discogs allows
   60 calls a minute (each lead takes about 2) and MusicBrainz one a second.
 - Discogs needs `DISCOGS_TOKEN`; without it the Discogs searches are skipped.
