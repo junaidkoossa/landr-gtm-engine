@@ -237,6 +237,9 @@ All sit next to the output CSV (default `data/`):
 | `enriched_creators.awaiting_clay.json` | The full evidence of leads waiting for Clay, for their re-score |
 | `enriched_creators.enrichment_report.csv` | One row per enriched lead: score before and after, change, reached 7+, email found |
 | `enriched_creators.enrichment_summary.txt` | The latest enrichment summary (see "Enrichment report") |
+| `enriched_creators.costs.csv` | Every model call and Clay row, priced: what each run cost (see "Costs, database and reports") |
+| `gtm.db` | SQLite copy of the above for SQL and pandas reports, updated after every run |
+| `outcomes.csv` | Outreach results you fill in (sent, replied, interested, converted) |
 
 ### Enrichment
 
@@ -583,6 +586,8 @@ python -m src.main --retry-failed      # try creators that failed earlier runs a
 python -m src.main --clay-experiment   # also send 20 leads scored 5 to Clay
 python -m src.main --import-clay data/clay_export.csv   # Clay's results: re-score, hooks, HubSpot
 python -m src.main --enrichment-report # before/after scores, experiment verdict, score spread
+python -m src.db sync                  # reload the database from the CSV files
+python -m src.reports                  # pass rates, Clay lift, costs, reply rates (needs pandas)
 ```
 
 Input, rules, and output paths can be overridden with `--input`, `--rules`,
@@ -592,6 +597,104 @@ production list.
 Run settings shared by every vertical (models, batch size, 90-day re-score, 3
 attempts, pages read) are in `src/settings.py`.
 
+## Costs, database and reports
+
+The CSV files stay the source of truth. Next to them, every run now keeps a cost file
+and a SQLite database, so you can answer questions like "what is the reply rate of
+leads scored 8?", "what does a qualified lead cost?" or "how much does Clay lift a
+score?" with SQL and pandas.
+
+### Costs
+
+Each model call logs its tokens (scoring and hooks, Claude, Gemini and Ollama, live or
+batch), and each lead sent to Clay, or looked up on Apollo or Hunter, logs one row.
+Both go to one file, `data/enriched_creators.costs.csv`, priced as they're written:
+
+| Column | Meaning |
+| --- | --- |
+| `run_id` | The run (its start time, UTC), shared by every line it logged |
+| `lead_key`, `name` | The lead the line is about |
+| `kind` | `tokens` (a model call) or `rows` (a flat per-row charge) |
+| `task` | `score`, `hook` or `enrich` |
+| `provider`, `model`, `batch` | Who was paid; `batch` is `yes` for Message Batches (half price) |
+| `input_tokens`, `output_tokens`, `rows` | What was used |
+| `cost_usd` | The price of that line; blank when it has no price |
+
+Prices are in `config/costs.json`: token prices per million for each model, the batch
+discount, and a flat price per row for Clay, Apollo and Hunter. **Set the Clay row
+price there** (your plan's price per credit times the credits one row uses in your Clay
+table); until it is set, Clay rows are logged with a blank cost and the report warns
+about it. Gemini is priced at 0 because test runs use the free tier, and Ollama is
+always free; their tokens are still logged. At the end of each run the log says what
+the run cost.
+
+### Database
+
+After every run (`python -m src.main`, `--import-clay` and `--resend-unsent`), the CSV
+files are loaded into `data/gtm.db` (SQLite, built into Python; nothing to install or
+run). To load them by hand, e.g. after editing `outcomes.csv`:
+
+```bash
+python -m src.db sync
+```
+
+Tables:
+
+| Table | One row per | Notes |
+| --- | --- | --- |
+| `leads` | lead in the output CSV | Main columns, plus the whole CSV row as JSON in `row_json`: `json_extract(row_json, '$.spotify_monthly_listeners')` reads any column, so new CSV columns need no schema change |
+| `score_events` | score a lead has had | Grows with every sync, so score history builds up from the first sync. `stage` is `initial`, or `before_enrichment` / `after_enrichment` for leads Clay enriched |
+| `score_components` | part of a score event | Each product's total (`component = 'total'`), Clay's per-product scores (`product = 'clay_mastering'`, ...) and each signal with its points, named as in the rules file (`releases`, `self_released`, ...). `known = 0` marks a signal no source could check (half its points counted). New products or signals are new rows |
+| `runs` | pipeline run | Command, provider, start and end, leads scored |
+| `costs` | line of the cost file | Reloaded from the file on every sync |
+| `outcomes` | outreach sent | Reloaded from `outcomes.csv` on every sync |
+
+`leads`, `costs` and `outcomes` are copies of their files; `score_events`,
+`score_components` and `runs` only grow. Deleting `gtm.db` loses only score history the
+CSV no longer shows. Open it in any SQLite tool (e.g. DB Browser for SQLite), or:
+
+```bash
+sqlite3 data/gtm.db "SELECT best_product, COUNT(*), AVG(score) FROM leads GROUP BY best_product"
+```
+
+### Outreach outcomes
+
+Record outreach in `data/outcomes.csv` (copy `data/outcomes.example.csv` to start):
+
+| Column | Meaning |
+| --- | --- |
+| `email`, or `website_url` / `youtube_url` / `instagram` / `tiktok` / `name` | Which lead; matched like the input file. Rows matching no lead are listed as warnings and left out |
+| `channel` | e.g. `email` (the default), `instagram_dm` |
+| `sent_at` | Date sent, `YYYY-MM-DD` (required) |
+| `replied`, `interested`, `converted` | `yes` or blank. Each implies the ones before it |
+| `notes` | Anything |
+
+The file holds names and emails, so it is in `.gitignore` and stays on your computer.
+
+### Reports
+
+The reports use pandas, which the pipeline itself doesn't need (about 60 MB with
+numpy). Install it once, in the same virtual environment:
+
+```bash
+pip install -r requirements-reports.txt
+python -m src.reports          # add --sync to update the database first
+```
+
+It prints four reports and writes each to a CSV in `data/reports/`:
+
+| Report | Answers |
+| --- | --- |
+| `pass_rates` | How many leads score 7, 8 and 9 or more, by lead type and best product |
+| `enrichment_lift` | Average score before and after Clay, how many went up or down, and how many reached the hook score (7), split into regular leads and the cutoff experiment |
+| `costs` and `cost_totals` | Spend by provider, task and model; total, cost per lead scored, cost per qualified lead (score 7+) |
+| `reply_rates` | Reply, interest and conversion rates by score band (1-4, 5-6, 7, 8, 9-10), using the score each lead had **when it was contacted**, so later re-scores don't blur the result |
+
+The SQL behind each report is at the top of `src/reports.py`; pandas does the grouping
+and the rates. Once outcomes come in, `score_components` joined to `outcomes` shows
+which signals actually predict a reply, which is how the weights in
+`config/vertical_rules.json` can be tuned from real responses.
+
 ## Development
 
 Run the test suite with:
@@ -599,6 +702,8 @@ Run the test suite with:
 ```bash
 python -m unittest discover -s tests
 ```
+
+The report tests are skipped when pandas isn't installed.
 
 For a guide to reading the project history and commit labels, see
 [CONTRIBUTING.md](CONTRIBUTING.md).
