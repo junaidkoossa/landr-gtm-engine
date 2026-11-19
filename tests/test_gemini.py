@@ -141,7 +141,7 @@ class GeminiTests(unittest.TestCase):
             evidence = merge_evidence([{"source": "website", "title": "", "text": "", "links": [],
                                         "audience_size": None, "release_count": None, "release_dates": []}], [])
             with (
-                patch.dict(os.environ, {"GEMINI_API_KEY": "K"}, clear=True),
+                patch.dict(os.environ, {"GEMINI_API_KEY": "K", "HOOK_PROVIDER": "none"}, clear=True),
                 patch("src.main.collect_evidence", return_value=evidence),
                 patch("src.gemini._get_client", return_value=gemini_client(*[GOOD] * 25)),
                 patch("src.main.submit_batch") as submit,

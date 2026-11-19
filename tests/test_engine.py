@@ -330,8 +330,17 @@ class WebhookTests(unittest.TestCase):
         rows = [scored(f"C{i}", f"https://c{i}.example", 8) for i in range(150)]
         with patch("src.activate.requests.post", return_value=Mock(status_code=200)) as post:
             send_to_webhook(rows, "https://h.example", "batched")
-        self.assertEqual(post.call_count, 2)
-        self.assertEqual(len(json.loads(post.call_args_list[0].kwargs["data"])["creators"]), 100)
+        sizes = [len(json.loads(call.kwargs["data"])["creators"]) for call in post.call_args_list]
+        self.assertEqual(sum(sizes), 150)
+        self.assertTrue(all(size <= 100 for size in sizes))
+        self.assertTrue(all(len(call.kwargs["data"]) <= 100_000 for call in post.call_args_list))
+
+    def test_batched_chunks_stay_under_the_size_limit(self):
+        rows = [scored(f"C{i}", f"https://c{i}.example", 8, custom_hook="x" * 5_000) for i in range(40)]
+        with patch("src.activate.requests.post", return_value=Mock(status_code=200)) as post:
+            outcomes = send_to_webhook(rows, "https://h.example", "batched")
+        self.assertTrue(all(error is None for _, error in outcomes))
+        self.assertGreater(post.call_count, 1)
 
 
 SCRAPE_OK = {
@@ -352,6 +361,14 @@ SCRAPE_OK = {
 def enrichment(score):
     """A scoring reply; tests patch final_score so the adjustment stands in for the score."""
     return {"score_adjustment": score, "adjustment_reason": "", "bottleneck": "Reach", "custom_hook": "Hook"}
+
+
+class NoEmails:
+    """An email finder that never finds one."""
+    provider = "apollo"
+
+    def find(self, row):
+        return None
 
 
 class PipelineTests(unittest.TestCase):
@@ -401,9 +418,11 @@ class PipelineTests(unittest.TestCase):
             patch("src.activate.requests.post", side_effect=route),
             patch("src.hubspot.time.sleep"),
         ):
+            # Apollo with a finder that finds nothing: scores stay final in the run, so
+            # delivery happens straight away (Clay would hold leads until the import).
             return run_pipeline(
                 input_path, self.rules_path, self.output_path, client=object(),
-                webhook_url=webhook_url, hubspot=hubspot,
+                webhook_url=webhook_url, hubspot=hubspot, enrichment="apollo", email_finder=NoEmails(),
             )
 
     def test_scores_sorts_and_records_webhook_status(self):
@@ -540,10 +559,11 @@ class PipelineTests(unittest.TestCase):
                 patch("src.main.enrich_creator", return_value=enrichment(8)),
             ):
                 run_pipeline(input_path, self.rules_path, self.output_path, client=object(),
-                             webhook_url="https://hooks.example")
+                             webhook_url="https://hooks.example", enrichment="apollo", email_finder=NoEmails())
                 with patch("src.main.is_stale", return_value=True):
                     run_pipeline(input_path, self.rules_path, self.output_path, client=object(),
-                                 webhook_url="https://hooks.example")
+                                 webhook_url="https://hooks.example", enrichment="apollo",
+                                 email_finder=NoEmails())
         self.assertEqual(post.call_count, 1)
 
 
@@ -622,7 +642,8 @@ class PipelineTests(unittest.TestCase):
         self.run_with(input_path, {"Site": 3})
         row = self.output()[0]
         self.assertEqual(row["score"], "3")
-        self.assertEqual(row["limited_data"], "no view figures, no dated releases")
+        # Nothing could be checked, so every product counts its signals at half.
+        self.assertEqual(row["limited_data"], "Mastering: only 0% of its points could be checked")
 
 
 class GuardTests(unittest.TestCase):

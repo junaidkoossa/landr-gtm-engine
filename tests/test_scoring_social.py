@@ -9,7 +9,14 @@ from unittest.mock import Mock, patch
 from src import instagram, tiktok
 from src.collect import merge_evidence
 from src.rules import load_vertical_rules
-from src.scoring import DEFAULT_SCORING, base_score, final_score, validate_scoring
+from src.scoring import (
+    DEFAULT_PRODUCTS,
+    big_act_test,
+    detect_signals,
+    final_score,
+    score_products,
+    validate_products,
+)
 
 TODAY = date(2026, 11, 17)
 
@@ -42,11 +49,12 @@ class SteadyViewsTests(unittest.TestCase):
         self.assertAlmostEqual(self.c["top_video_share"], 0.98, places=2)
         self.assertEqual(self.c["views_last_12_months"], self.b["views_last_12_months"] - 50 + 79)
 
-    def test_scores_follow(self):
-        scores = {name: base_score(ev, is_label=False)[0] for name, ev in
-                  (("A", self.a), ("B", self.b), ("C", self.c))}
-        self.assertGreater(scores["B"], scores["A"])
-        self.assertGreater(scores["A"], scores["C"])
+    def test_steady_views_feed_reach(self):
+        # A (1M) earns full Mastering reach; C (100K) too; B (5M) is over the cap.
+        reach = {name: score_products(ev, False, today=TODAY)["product_breakdowns"] for name, ev in
+                 (("A", self.a), ("B", self.b), ("C", self.c))}
+        self.assertIn("reach 100.7K 2/2", reach["C"])
+        self.assertRegex(reach["B"], r"reach 5(\.\d)?M, (over the cap 1/2|big-act test 2/2)")
 
     def test_new_releases_count_but_not_their_views(self):
         part = youtube_part([10_000] * 10)
@@ -64,44 +72,92 @@ class SteadyViewsTests(unittest.TestCase):
         self.assertIsNone(evidence["steady_views"])
 
 
-class BaseScoreTests(unittest.TestCase):
-    def test_creator_breakdown(self):
-        score, breakdown = base_score({
-            "steady_views": 1_200_000, "active_months_last_12": 8, "storefront_links": ["x"],
-            "audience_size": 5_000, "top_video_share": 0.1,
-        }, is_label=False)
-        self.assertEqual(score, 3 + 2 + 2 + 0)
-        self.assertIn("steady views 3/4 (1.2M; top release has 10% of views)", breakdown)
-        self.assertIn("audience 0/1 (5K)", breakdown)
+def lead(**fields):
+    base = {"releases_last_12_months": 12, "latest_release_date": (TODAY - timedelta(days=10)).isoformat(),
+            "product_signals": [], "storefront_links": []}
+    return {**base, **fields}
 
-    def test_label_storefront_is_only_a_bonus(self):
-        label = {"active_months_last_12": 12, "release_count": 600}
-        self.assertEqual(base_score(label, is_label=True)[0], 10)  # full marks without a store
-        self.assertEqual(base_score({**label, "storefront_links": ["x"]}, is_label=True)[0], 10)  # capped
-        small = {"active_months_last_12": 6, "release_count": 60}
-        self.assertEqual(base_score(small, is_label=True)[0], 3 + 2)
-        self.assertEqual(base_score({**small, "storefront_links": ["x"]}, is_label=True)[0], 6)
 
-    def test_minimum_is_one_and_adjustment_is_capped(self):
-        self.assertEqual(base_score({}, is_label=False)[0], 1)
+class ProductScoreTests(unittest.TestCase):
+    def test_mastering_breakdown_and_unknowns_count_half(self):
+        row = score_products(lead(steady_views=300_000), False, today=TODAY)
+        # releases 2/3, recency 2/2, reach 2/2, mastering credit 1 of 2, self-released 0.5 of 1
+        self.assertEqual((row["best_product"], row["score_mastering"]), ("mastering", 8))
+        self.assertIn("mastering credit unknown (half of 2 counted)", row["score_breakdown"])
+        self.assertTrue(row["score_breakdown"].startswith("Mastering: 12 releases in 12 months 2/3"))
+        self.assertEqual(row["limited_data"], "")
+
+    def test_each_product_rewards_its_own_signals(self):
+        plugins = score_products(lead(product_signals=["producer_engineer", "production_content",
+                                                       "third_party_plugins"]), False, today=TODAY)
+        self.assertEqual((plugins["best_product"], plugins["score_plugins"]), ("plugins", 10))
+        samples = score_products(lead(product_signals=["sells_sample_packs"], storefront_links=["x"],
+                                      pack_count=60, latest_pack_date=TODAY.isoformat(), audience_size=150_000,
+                                      releases_last_12_months=1), False, today=TODAY)
+        self.assertEqual((samples["best_product"], samples["score_samples"]), ("samples", 10))
+        distribution = score_products(lead(product_signals=["distributor:distrokid"], self_released="yes",
+                                           spotify_monthly_listeners=20_000), False, today=TODAY)
+        self.assertEqual(distribution["score_distribution"], 10)
+        self.assertIn("uses distrokid 2/2", distribution["product_breakdowns"])
+
+    def test_labels_only_get_distribution_and_samples(self):
+        row = score_products(lead(), True, today=TODAY)
+        self.assertEqual((row["score_mastering"], row["score_plugins"]), (0, 0))
+        self.assertIn(row["best_product"], ("distribution", "samples"))
+
+    def test_clay_answers_override_page_text(self):
+        no_credit = score_products(lead(mastering_credit="no", self_released="yes"), False, today=TODAY)
+        credit = score_products(lead(mastering_credit="yes", self_released="no"), False, today=TODAY)
+        self.assertGreater(no_credit["score_mastering"], credit["score_mastering"])
+        self.assertIn("has a label 0/1", credit["product_breakdowns"])
+
+    def test_big_acts_are_capped_except_the_test_group(self):
+        keys = [f"artist{i}.example" for i in range(400)]
+        in_test = [k for k in keys if big_act_test(k)]
+        self.assertTrue(20 <= len(in_test) <= 60)  # about 10%
+        outside = next(k for k in keys if not big_act_test(k))
+        capped = score_products(lead(steady_views=5_000_000), False, key=outside, today=TODAY)
+        tested = score_products(lead(steady_views=5_000_000), False, key=in_test[0], today=TODAY)
+        self.assertIn("over the cap 1/2", capped["product_breakdowns"])
+        self.assertIn("big-act test 2/2", tested["product_breakdowns"])
+        self.assertEqual((capped["big_act_test"], tested["big_act_test"]), ("", "yes"))
+        self.assertEqual(big_act_test(in_test[0]), big_act_test(in_test[0]))  # stable
+
+    def test_detect_signals(self):
+        found = detect_signals("Mixing engineer and producer. New drum kit out! Serum presets. Self-released.",
+                               ["https://distrokid.com/hyperfollow/x"])
+        self.assertEqual(set(found), {"producer_engineer", "sells_sample_packs", "third_party_plugins",
+                                      "self_released", "distributor:distrokid"})
+        self.assertEqual(detect_signals("We love the reproducer word", []), [])
+
+    def test_minimum_and_adjustment(self):
         self.assertEqual(final_score(9, 1), 10)
         self.assertEqual(final_score(10, 1), 10)
         self.assertEqual(final_score(1, -1), 1)
         self.assertEqual(final_score(5, 3), 6)
 
-    def test_rules_file_scoring_is_validated(self):
-        validate_scoring(json.loads(json.dumps(DEFAULT_SCORING)))
-        bad = json.loads(json.dumps(DEFAULT_SCORING))
-        bad["creator"]["steady_views"]["bands"] = [1, 2]
-        with self.assertRaisesRegex(ValueError, "4 rising numbers"):
-            validate_scoring(bad)
+    def test_rules_file_products_are_validated(self):
+        validate_products(json.loads(json.dumps(DEFAULT_PRODUCTS)))
+        bad = json.loads(json.dumps(DEFAULT_PRODUCTS))
+        bad["plugins"]["made_up"] = {"points": 1}
+        with self.assertRaisesRegex(ValueError, "unknown signals: made_up"):
+            validate_products(bad)
+        bad = json.loads(json.dumps(DEFAULT_PRODUCTS))
+        bad["mastering"]["releases"]["bands"] = [12, 6]
+        with self.assertRaisesRegex(ValueError, "must rise"):
+            validate_products(bad)
+        lighter = json.loads(json.dumps(DEFAULT_PRODUCTS))
+        del lighter["plugins"]["third_party_plugins"]  # dropping a signal is allowed
+        validate_products(lighter)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "rules.json"
             path.write_text(json.dumps({"target_vertical": "M", "ideal_customer_profile": "C",
-                                        "signal_keywords": [], "evaluation_criteria": "E"}))
-            self.assertEqual(load_vertical_rules(path)["scoring"], DEFAULT_SCORING)
-        self.assertEqual(load_vertical_rules("config/vertical_rules.json")["scoring"], DEFAULT_SCORING)
-
+                                        "signal_keywords": [], "evaluation_criteria": "E",
+                                        "scoring": {"old": "weights"}}))
+            self.assertEqual(load_vertical_rules(path)["products"], DEFAULT_PRODUCTS)
+        rules = load_vertical_rules("config/vertical_rules.json")
+        self.assertEqual(rules["products"], DEFAULT_PRODUCTS)
+        self.assertTrue(rules["scoring_version"])
 
 def response(status, data):
     mock = Mock(status_code=status)
@@ -257,10 +313,10 @@ class FollowUpTests(unittest.TestCase):
         self.assertEqual(evidence["estimated_sources"], ["tiktok"])
 
     def test_limited_data(self):
-        from src.scoring import limited_data
-        self.assertEqual(limited_data({"steady_views": 1, "active_months_last_12": 3}, False), "")
-        self.assertEqual(limited_data({}, False), "no view figures, no dated releases")
-        self.assertEqual(limited_data({"release_count": 5}, True), "no dated releases")
+        from src.scoring import score_products
+        known = {"releases_last_12_months": 8, "latest_release_date": TODAY.isoformat(), "product_signals": []}
+        self.assertEqual(score_products(known, False, today=TODAY)["limited_data"], "")
+        self.assertIn("only 0%", score_products({}, False, today=TODAY)["limited_data"])
 
     def test_discogs_newest_releases_get_exact_dates(self):
         from src import labels

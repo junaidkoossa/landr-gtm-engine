@@ -159,16 +159,16 @@ class OllamaScoringTests(unittest.TestCase):
 class HookTests(unittest.TestCase):
     def test_hook_provider_defaults(self):
         with patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(hook_provider("ollama"), "claude")
-            self.assertEqual(hook_provider("claude"), "same")
-            self.assertEqual(hook_provider("gemini"), "same")
-            self.assertEqual(hook_provider("ollama", "ollama"), "same")
-            self.assertEqual(hook_provider("claude", "claude"), "same")
-            self.assertEqual(hook_provider("gemini", "claude"), "claude")
+            # Hooks are always written by Claude after the final score, whoever scores.
+            for scoring in ("ollama", "claude", "gemini"):
+                self.assertEqual(hook_provider(scoring), "claude")
+            self.assertEqual(hook_provider("gemini", "same"), "claude")  # older setting
         with patch.dict(os.environ, {"HOOK_PROVIDER": "None"}, clear=True):
             self.assertEqual(hook_provider("ollama"), "none")
         with self.assertRaisesRegex(ValueError, "HOOK_PROVIDER"):
             hook_provider("ollama", "gpt")
+        with self.assertRaisesRegex(ValueError, "HOOK_PROVIDER"):
+            hook_provider("ollama", "ollama")
 
     def test_only_top_scored_creators_get_a_claude_hook(self):
         client = claude_client()
@@ -197,6 +197,13 @@ class HookTests(unittest.TestCase):
             writer.write({"name": "A"}, {}, RULES, {}, 9)
 
 
+class NoEmails:
+    provider = "hunter"
+
+    def find(self, row):
+        return None
+
+
 class OllamaPipelineTests(unittest.TestCase):
     def setUp(self):
         from src.collect import merge_evidence
@@ -220,8 +227,9 @@ class OllamaPipelineTests(unittest.TestCase):
             patch("src.main.anthropic.Anthropic", return_value=client),
             self.assertLogs("src.main", level="INFO") as logs,
         ):
+            # Hunter finding nothing keeps every score final in the run (no Clay wait).
             results = run_pipeline(self.root / "in.csv", self.root / "rules.json", self.root / "out.csv",
-                                   scoring="batch")
+                                   scoring="batch", enrichment="hunter", email_finder=NoEmails())
         return results, logs.output
 
     def test_local_scoring_with_claude_hooks_for_top_leads(self):
