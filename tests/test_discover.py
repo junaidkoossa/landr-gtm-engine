@@ -201,6 +201,19 @@ class ScoringHookupTests(unittest.TestCase):
         self.assertIn("producer_engineer", detect_signals("New drop", ["https://www.beatstars.com/maple"]))
         self.assertEqual(detect_signals("Out with the release today", []), [])
 
+    def test_release_promotion_counts_for_distribution(self):
+        from src.scoring import detect_signals, score_products
+        self.assertEqual(detect_signals("New single OUT NOW, link in bio", []), ["release_promo"])
+        self.assertEqual(detect_signals("Pre-save my EP", []), ["release_promo"])
+        self.assertEqual(detect_signals("New drop", ["https://ffm.to/mysingle"]), ["release_promo"])
+        self.assertEqual(detect_signals("Out of office now", []), [])
+        today = date(2026, 11, 18)
+        promo = score_products({"product_signals": ["release_promo"]}, False, today=today)
+        quiet = score_products({"product_signals": []}, False, today=today)
+        self.assertIn("promotes releases (out now, pre-save, link in bio) 2/2", promo["product_breakdowns"])
+        self.assertIn("no release promotion found 0/2", quiet["product_breakdowns"])
+        self.assertGreater(promo["score_distribution"], quiet["score_distribution"])
+
     def test_discovered_self_release_is_scored_and_lead_source_kept(self):
         import json
 

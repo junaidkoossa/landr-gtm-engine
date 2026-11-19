@@ -136,6 +136,7 @@ for leads scoring 7 or more.
 | Releases in the last 12 months: 6 / 12+ | 1 / 2 |
 | Latest release within 30 days | 1 |
 | Spotify monthly listeners: 1K / 10K+ (Clay) | 1 / 2 |
+| Promotes their releases: "out now", "pre-save", "link in bio", or a smart link (Linktree, feature.fm, ffm.to, lnk.to...) | 2 |
 
 | Samples supplier | Points |
 | --- | --- |
@@ -161,8 +162,9 @@ predict interest. Points can be changed, and a signal dropped, in the rules file
   lead is neither buried nor promoted for missing data; the breakdown says "half of N
   counted". Page phrases are found in `product_signals` (`src/scoring.py` lists them).
   They are read from website text, YouTube titles, and Instagram and TikTok captions
-  and bios, so the social triggers (competitor distributor, beatmaker, production
-  content, self-released) feed the product they point to.
+  and bios, so the social triggers (competitor distributor, release promotion,
+  beatmaker, production content, self-released) feed the product they point to.
+  Distribution has 12 points in all; like every product, its score is scaled to 10.
 - **Limited data goes to Clay.** When under 60% of the points our own sources can check
   were checked for the best product (Clay-only signals are left out of that share),
   `limited_data` says so and the lead is sent to Clay whatever its score.

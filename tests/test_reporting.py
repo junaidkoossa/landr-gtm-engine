@@ -30,7 +30,8 @@ BREAKDOWN = (
     "Mastering 8: 14 releases in 12 months 3/3; latest release 5 days ago 2/2; "
     "mastering credit unknown (half of 2 counted); self-released 1/1; reach 50K 2/2 | "
     "Distribution 5: label status unknown (half of 3 counted); no distributor found 1/2; "
-    "14 releases in 12 months 2/2; latest release 5 days ago 1/1; Spotify listeners unknown (half of 2 counted)"
+    "14 releases in 12 months 2/2; latest release 5 days ago 1/1; Spotify listeners unknown (half of 2 counted); "
+    "promotes releases (out now, pre-save, link in bio) 2/2"
 )
 
 
@@ -170,6 +171,7 @@ class DatabaseTests(Workspace):
         self.assertIn(("mastering", "releases", 3.0, 3.0, 1), rows)
         self.assertIn(("mastering", "no_mastering_credit", 1.0, 2.0, 0), rows)  # unknown: half counted
         self.assertIn(("distribution", "competitor_distributor", 1.0, 2.0, 1), rows)
+        self.assertIn(("distribution", "release_promo", 2.0, 2.0, 1), rows)
 
     def test_breakdown_that_doesnt_match_the_rules_keeps_its_text(self):
         parts = db.parse_breakdowns("Mastering 6: releases unknown (half of 3 counted); something new 1/1")

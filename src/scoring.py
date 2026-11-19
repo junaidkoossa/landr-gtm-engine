@@ -53,6 +53,7 @@ DEFAULT_PRODUCTS = {
         "releases": {"points": 2, "bands": [6, 12]},
         "recency": {"points": 1, "days": [30]},
         "spotify_listeners": {"points": 2, "bands": [1_000, 10_000]},
+        "release_promo": {"points": 2},
     },
     "samples": {
         "sells_sample_packs": {"points": 3},
@@ -99,12 +100,18 @@ KEYWORD_SIGNALS = {
         "sound kits", "sound library", "preset pack", "midi pack", "one shots", "one-shots",
     ),
     "self_released": ("self-released", "self released", "independent artist", "not on label"),
+    # Promoting their own releases (Instagram/TikTok triggers): people who need distribution.
+    "release_promo": (
+        "out now", "out everywhere", "available everywhere", "streaming everywhere", "pre-save", "presave",
+        "pre save", "link in bio", "link in my bio", "new single out", "new music out",
+    ),
 }
 FLAG_WORDS = {
     "producer_engineer": ("produces or mixes for others", "no producing or mixing for others"),
     "production_content": ("makes production content", "no production content"),
     "sells_sample_packs": ("sells sample packs", "no sample packs"),
     "third_party_plugins": ("uses third-party plugins", "no third-party plugins mentioned"),
+    "release_promo": ("promotes releases (out now, pre-save, link in bio)", "no release promotion found"),
 }
 COMPETITOR_DISTRIBUTORS = {
     "distrokid": ("distrokid.com", "distrokid", "hyperfollow"),
@@ -118,6 +125,11 @@ COMPETITOR_DISTRIBUTORS = {
 }
 # Beat stores: a producer selling beats to artists.
 PRODUCER_HOSTS = ("beatstars.com", "airbit.com", "traktrain.com")
+# Smart links and link-in-bio pages artists use for pre-saves and "out now" posts.
+RELEASE_PROMO_HOSTS = (
+    "linktr.ee", "hyperfollow", "ffm.to", "feature.fm", "lnk.to", "smarturl.it", "song.link",
+    "odesli.co", "songwhip.com", "toneden.io", "show.co", "found.ee", "push.fm", "solo.to", "beacons.ai",
+)
 _PATTERNS = {
     name: re.compile(r"(?<![\w-])(" + "|".join(re.escape(p) for p in phrases) + r")(?![\w-])", re.IGNORECASE)
     for name, phrases in KEYWORD_SIGNALS.items()
@@ -130,6 +142,8 @@ def detect_signals(text: str, links: list[str] | None = None) -> list[str]:
     found = [name for name, pattern in _PATTERNS.items() if pattern.search(text or "")]
     if "producer_engineer" not in found and any(host in link.lower() for link in links or [] for host in PRODUCER_HOSTS):
         found.append("producer_engineer")
+    if "release_promo" not in found and any(host in link.lower() for link in links or [] for host in RELEASE_PROMO_HOSTS):
+        found.append("release_promo")
     haystack = f"{text or ''} {' '.join(links or [])}".lower()
     for name, needles in COMPETITOR_DISTRIBUTORS.items():
         if any(needle in haystack for needle in needles):
@@ -307,7 +321,7 @@ def _signal(name: str, settings: dict, evidence: dict, today: date, test_group: 
         has_store = bool(evidence.get("storefront_links"))
         return (points, "sells direct") if has_store else (0, "no storefront")
     clay_fields = {"producer_engineer": "producer_or_engineer", "production_content": "makes_production_content",
-                   "sells_sample_packs": None, "third_party_plugins": None}
+                   "sells_sample_packs": None, "third_party_plugins": None, "release_promo": None}
     if name in clay_fields:
         flag = _flag(evidence, name, clay_fields[name])
         if name == "sells_sample_packs" and (_number(evidence.get("pack_count")) or 0) > 0:

@@ -95,7 +95,7 @@ class ProductScoreTests(unittest.TestCase):
                                       pack_count=60, latest_pack_date=TODAY.isoformat(), audience_size=150_000,
                                       releases_last_12_months=1), False, today=TODAY)
         self.assertEqual((samples["best_product"], samples["score_samples"]), ("samples", 10))
-        distribution = score_products(lead(product_signals=["distributor:distrokid"], self_released="yes",
+        distribution = score_products(lead(product_signals=["distributor:distrokid", "release_promo"], self_released="yes",
                                            spotify_monthly_listeners=20_000), False, today=TODAY)
         self.assertEqual(distribution["score_distribution"], 10)
         self.assertIn("uses distrokid 2/2", distribution["product_breakdowns"])
@@ -127,7 +127,7 @@ class ProductScoreTests(unittest.TestCase):
         found = detect_signals("Mixing engineer and producer. New drum kit out! Serum presets. Self-released.",
                                ["https://distrokid.com/hyperfollow/x"])
         self.assertEqual(set(found), {"producer_engineer", "sells_sample_packs", "third_party_plugins",
-                                      "self_released", "distributor:distrokid"})
+                                      "self_released", "distributor:distrokid", "release_promo"})
         self.assertEqual(detect_signals("We love the reproducer word", []), [])
 
     def test_minimum_and_adjustment(self):
