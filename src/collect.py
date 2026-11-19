@@ -27,6 +27,7 @@ from src.scraper import (
     find_storefront_links,
     scrape_website,
 )
+from src.scoring import detect_signals
 from src.settings import VIEW_MATURITY_DAYS
 from src.social import INSTAGRAM_HOSTS, TIKTOK_HOSTS, instagram_handle, on_host, tiktok_handle
 from src.youtube import fetch_youtube_channel, is_youtube_url
@@ -138,6 +139,8 @@ def merge_evidence(
         "source_text": text[:MAX_SOURCE_TEXT_LENGTH],
         "storefront_links": storefront_links,
         "release_signals": find_release_signals(text, storefront_links, signal_keywords),
+        # Product signals (src/scoring.py): producer, sample packs, competitor distributor...
+        "product_signals": detect_signals(text, links),
         "data_sources": [part["source"] for part in parts],
         "audience_size": max(audiences) if audiences else None,
         "release_count": max(counts) if counts else None,

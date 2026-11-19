@@ -6,8 +6,9 @@ requests over the rate limit with a 429, and holds at most 50,000 records per we
 source. Webhooks need a Clay Growth or Enterprise plan. So in "clay" format each creator
 is its own POST, sent at most CLAY_REQUESTS_PER_SECOND, with a retry after a 429.
 
-The "batched" format sends {"creators": [...]} in chunks, for receivers (Zapier, Make,
-your own endpoint) that accept many records per request.
+The "batched" format sends {"creators": [...]} in chunks of up to 100 creators (fewer
+when 100 would go over 100 KB), for receivers (Zapier, Make, your own endpoint) that
+accept many records per request.
 """
 import json
 import logging
@@ -25,7 +26,12 @@ MAX_PAYLOAD_BYTES = 100_000
 CLAY_REQUESTS_PER_SECOND = 8
 RETRIES_AFTER_RATE_LIMIT = 3
 BATCHED_CHUNK_SIZE = 100
-PAYLOAD_COLUMNS = tuple(c for c in OUTPUT_COLUMNS if c not in ("webhook_status", "webhook_sent_at"))
+# Delivery and enrichment bookkeeping stays out of the payload.
+INTERNAL_COLUMNS = (
+    "webhook_status", "webhook_sent_at", "hubspot_status", "hubspot_synced_at", "email_source",
+    "enrichment_provider", "enrichment_status", "enrichment_sent_at", "enrichment_returned_at",
+)
+PAYLOAD_COLUMNS = tuple(c for c in OUTPUT_COLUMNS if c not in INTERNAL_COLUMNS)
 
 
 def webhook_payload(row: dict[str, object]) -> dict[str, object]:
@@ -57,6 +63,28 @@ def _post(url: str, body: dict[str, object]) -> None:
         return
 
 
+def _size(payload: dict[str, object]) -> int:
+    return len(json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8"))
+
+
+def _chunks(rows: list[dict[str, object]]) -> list[list[dict[str, object]]]:
+    """Up to BATCHED_CHUNK_SIZE rows per chunk, starting a new chunk early when the next
+    row would take the request over MAX_PAYLOAD_BYTES."""
+    chunks: list[list[dict[str, object]]] = []
+    current: list[dict[str, object]] = []
+    size = len('{"creators": []}')
+    for row in rows:
+        row_size = _size(webhook_payload(row)) + 2  # plus the separator
+        if current and (len(current) >= BATCHED_CHUNK_SIZE or size + row_size > MAX_PAYLOAD_BYTES):
+            chunks.append(current)
+            current, size = [], len('{"creators": []}')
+        current.append(row)
+        size += row_size
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def send_to_webhook(
     rows: list[dict[str, object]], url: str, webhook_format: str = "clay"
 ) -> list[tuple[dict[str, object], Exception | None]]:
@@ -79,8 +107,7 @@ def send_to_webhook(
                 time.sleep(remaining)
         return outcomes
 
-    for start in range(0, len(rows), BATCHED_CHUNK_SIZE):
-        chunk = rows[start:start + BATCHED_CHUNK_SIZE]
+    for chunk in _chunks(rows):
         try:
             _post(url, {"creators": [webhook_payload(row) for row in chunk]})
             outcomes.extend((row, None) for row in chunk)

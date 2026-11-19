@@ -10,47 +10,119 @@
     "new release",
     "latest release"
   ],
-  "evaluation_criteria": "The score is weighted in code (see 'scoring'): creators on steady views, release consistency, a storefront and audience size; labels on release consistency and catalogue size, with a storefront as a small bonus. Favour creators who release constantly and are consistently watched over those carried by one breakout video. Treat missing figures as unknown, not zero.",
+  "evaluation_criteria": "Each lead is scored per LANDR product in code (see 'products'): Mastering (AI mastering plugin and subscriptions) on release volume, recency, no mastering credit, self-releasing and mid-size reach; Distribution on self-releasing, a competitor distributor, release volume, recency and Spotify listeners; Samples supplier on making sample packs, catalogue size, a recent pack, selling direct and followers; Plugins (LANDR's own) on producing or mixing for others, production content, using third-party plugins, release volume and recency. Review the best product's score. Treat missing figures as unknown, not zero.",
   "activation_min_score": 1,
-  "scoring": {
-    "creator": {
-      "steady_views": {
-        "points": 4,
+  "products": {
+    "mastering": {
+      "releases": {
+        "points": 3,
         "bands": [
-          50000,
-          250000,
-          1000000,
-          5000000
+          6,
+          12,
+          24
         ]
       },
-      "consistency": {
-        "points": 3
+      "recency": {
+        "points": 2,
+        "days": [
+          90,
+          30
+        ]
       },
-      "storefront": {
+      "no_mastering_credit": {
         "points": 2
       },
-      "audience": {
-        "points": 1,
-        "min_followers": 10000
+      "self_released": {
+        "points": 1
+      },
+      "reach": {
+        "points": 2,
+        "min": 10000,
+        "cap_above": 1000000,
+        "capped_points": 1
       }
     },
-    "label": {
-      "consistency": {
-        "points": 5
+    "distribution": {
+      "self_released": {
+        "points": 3
       },
-      "catalogue_size": {
-        "points": 5,
+      "competitor_distributor": {
+        "points": 2,
+        "none_found": 1
+      },
+      "releases": {
+        "points": 2,
         "bands": [
-          10,
-          50,
-          100,
-          250,
-          500
+          6,
+          12
         ]
       },
-      "storefront_bonus": {
+      "recency": {
+        "points": 1,
+        "days": [
+          30
+        ]
+      },
+      "spotify_listeners": {
+        "points": 2,
+        "bands": [
+          1000,
+          10000
+        ]
+      }
+    },
+    "samples": {
+      "sells_sample_packs": {
+        "points": 3
+      },
+      "pack_count": {
+        "points": 2,
+        "bands": [
+          10,
+          50
+        ]
+      },
+      "new_pack": {
+        "points": 2,
+        "days": [
+          90
+        ]
+      },
+      "sells_direct": {
         "points": 1
+      },
+      "followers": {
+        "points": 2,
+        "bands": [
+          10000,
+          100000
+        ]
+      }
+    },
+    "plugins": {
+      "producer_engineer": {
+        "points": 3
+      },
+      "production_content": {
+        "points": 2
+      },
+      "third_party_plugins": {
+        "points": 2
+      },
+      "releases": {
+        "points": 2,
+        "bands": [
+          6,
+          12
+        ]
+      },
+      "recency": {
+        "points": 1,
+        "days": [
+          30
+        ]
       }
     }
-  }
+  },
+  "scoring_version": "2026-11-19-products-v1"
 }

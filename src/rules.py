@@ -1,8 +1,7 @@
-import copy
 import json
 from pathlib import Path
 
-from src.scoring import DEFAULT_SCORING, validate_scoring
+from src.scoring import default_products, validate_products
 
 REQUIRED_RULE_FIELDS = (
     "target_vertical",
@@ -41,7 +40,12 @@ def load_vertical_rules(path: str | Path) -> dict[str, object]:
     min_score = rules.setdefault("activation_min_score", DEFAULT_ACTIVATION_MIN_SCORE)
     if isinstance(min_score, bool) or not isinstance(min_score, int) or not 1 <= min_score <= 10:
         raise ValueError(f"{path} field 'activation_min_score' must be an integer from 1 to 10")
-    rules["scoring"] = validate_scoring(rules.get("scoring", copy.deepcopy(DEFAULT_SCORING)))
+    # "scoring" (the single creator/label score) was replaced by per-product scores.
+    rules.pop("scoring", None)
+    rules["products"] = validate_products(rules.get("products", default_products()))
+    version = rules.setdefault("scoring_version", "")
+    if not isinstance(version, str):
+        raise ValueError(f"{path} field 'scoring_version' must be a string")
     return rules
 
 

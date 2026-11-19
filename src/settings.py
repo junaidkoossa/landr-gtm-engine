@@ -25,11 +25,35 @@ OLLAMA_MAX_RETRIES = 2
 # Seconds to wait for one reply; the first one also waits for the model to load.
 OLLAMA_TIMEOUT_SECONDS = 300
 
-# Outreach hooks. HOOK_PROVIDER "same" has the scoring model write the hook in the same
-# reply (the default for Claude and Gemini); "claude" has Claude write it in a separate
-# call, only for creators scoring at least HOOK_MIN_SCORE (the default for Ollama);
-# "none" writes no hooks.
+# Outreach hooks. Claude writes them in a separate call once a lead's score is final
+# (after enrichment), only for leads scoring at least HOOK_MIN_SCORE. HOOK_PROVIDER=none
+# writes no hooks.
 HOOK_MIN_SCORE = 7
+
+# Enrichment (src/enrichment.py). ENRICHMENT_PROVIDER: "clay" (the default), "apollo" or
+# "hunter". Leads scoring at least ENRICH_MIN_SCORE are enriched.
+ENRICHMENT_PROVIDER = "clay"
+ENRICH_MIN_SCORE = 6
+# Only leads scoring at least this (and with an email) go to HubSpot.
+HUBSPOT_MIN_SCORE = 7
+# The cutoff experiment (--clay-experiment): a random sample of leads scoring exactly
+# CLAY_EXPERIMENT_SCORE is enriched anyway. If more than CLAY_EXPERIMENT_THRESHOLD of
+# them reach HOOK_MIN_SCORE after enrichment, the report suggests lowering
+# ENRICH_MIN_SCORE to CLAY_EXPERIMENT_SCORE. Fewer than CLAY_EXPERIMENT_SAMPLE is too
+# small to call.
+CLAY_EXPERIMENT_SCORE = 5
+CLAY_EXPERIMENT_SAMPLE = 20
+CLAY_EXPERIMENT_THRESHOLD = 0.5
+# Clay's lead score (a clay_score column in its export) is the final score of the leads
+# it enriched. CLAY_SCORE_MAX is the top of Clay's scale (10, or 100 for a 0-100 score);
+# it is scaled onto 1-10.
+CLAY_SCORE_MAX = 10
+# Mastering caps reach points for acts over 1M listeners or views (they usually have an
+# engineer already). This share of those acts, picked by a stable hash of the lead, get
+# the full points instead and are marked big_act_test, to test that against replies.
+BIG_ACT_TEST_SHARE = 0.10
+# Apollo and Hunter lookups, one at a time (each one can use a credit).
+EMAIL_LOOKUPS_PER_SECOND = 1
 
 # In "auto" scoring mode, runs scoring at least this many creators use the Batch API.
 BATCH_THRESHOLD = 20

@@ -38,6 +38,21 @@ CUSTOM_PROPERTIES = {
     "landr_releases_last_12_months": ("LANDR releases in last 12 months", "number", "number", "releases_last_12_months"),
     "landr_latest_release_date": ("LANDR latest release date", "string", "text", "latest_release_date"),
     "landr_scored_at": ("LANDR scored at", "string", "text", "enriched_at"),
+    "landr_spotify_monthly_listeners": ("LANDR Spotify monthly listeners", "number", "number", "spotify_monthly_listeners"),
+    "landr_roster_size": ("LANDR roster size", "number", "number", "roster_size"),
+    "landr_score_before_enrichment": ("LANDR score before enrichment", "number", "number", "score_before_enrichment"),
+    "landr_research_notes": ("LANDR research notes", "string", "textarea", "clay_research"),
+    "landr_best_product": ("LANDR best product", "string", "text", "best_product"),
+    "landr_score_mastering": ("LANDR score: Mastering", "number", "number", "score_mastering"),
+    "landr_score_distribution": ("LANDR score: Distribution", "number", "number", "score_distribution"),
+    "landr_score_samples": ("LANDR score: Samples supplier", "number", "number", "score_samples"),
+    "landr_score_plugins": ("LANDR score: Plugins", "number", "number", "score_plugins"),
+    "landr_clay_score_mastering": ("LANDR Clay score: Mastering", "number", "number", "clay_score_mastering"),
+    "landr_clay_score_distribution": ("LANDR Clay score: Distribution", "number", "number", "clay_score_distribution"),
+    "landr_clay_score_samples": ("LANDR Clay score: Samples supplier", "number", "number", "clay_score_samples"),
+    "landr_clay_score_plugins": ("LANDR Clay score: Plugins", "number", "number", "clay_score_plugins"),
+    "landr_big_act_test": ("LANDR big-act test", "string", "text", "big_act_test"),
+    "landr_scoring_version": ("LANDR scoring version", "string", "text", "scoring_version"),
 }
 
 

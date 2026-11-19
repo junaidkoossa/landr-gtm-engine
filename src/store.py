@@ -5,6 +5,9 @@
 - Unsent CSV: every creator in the output that hasn't reached the webhook or HubSpot.
 - Failures CSV: creators whose data or scoring failed, with an attempt count.
 - Review CSV: label matches that weren't exact, for a person to check.
+
+Enrichment columns (see src/enrichment.py) are kept when a creator is scored again,
+so figures Clay found aren't lost on a 90-day re-score.
 """
 import csv
 import os
@@ -28,11 +31,20 @@ OUTPUT_COLUMNS = (
     "page_title",
     "storefront_links",
     "release_signals",
+    "product_signals",
     "score",
+    "best_product",
+    "score_mastering",
+    "score_distribution",
+    "score_samples",
+    "score_plugins",
     "base_score",
     "score_adjustment",
     "adjustment_reason",
     "score_breakdown",
+    "product_breakdowns",
+    "big_act_test",
+    "scoring_version",
     "scored_by",
     "bottleneck",
     "custom_hook",
@@ -49,6 +61,28 @@ OUTPUT_COLUMNS = (
     "top_video_share",
     "estimated_sources",
     "limited_data",
+    "spotify_monthly_listeners",
+    "clay_followers",
+    "roster_size",
+    "self_released",
+    "mastering_credit",
+    "pack_count",
+    "latest_pack_date",
+    "producer_or_engineer",
+    "makes_production_content",
+    "clay_research",
+    "clay_score_mastering",
+    "clay_score_distribution",
+    "clay_score_samples",
+    "clay_score_plugins",
+    "clay_score_version",
+    "email_source",
+    "score_before_enrichment",
+    "enrichment_provider",
+    "enrichment_status",
+    "enrichment_experiment",
+    "enrichment_sent_at",
+    "enrichment_returned_at",
     "needs_review",
     "review_reason",
     "enriched_at",
@@ -57,7 +91,7 @@ OUTPUT_COLUMNS = (
     "hubspot_status",
     "hubspot_synced_at",
 )
-LIST_COLUMNS = ("storefront_links", "release_signals", "data_sources", "estimated_sources")
+LIST_COLUMNS = ("storefront_links", "release_signals", "product_signals", "data_sources", "estimated_sources")
 LIST_SEPARATOR = " | "
 
 # webhook_status values
@@ -69,6 +103,28 @@ NO_WEBHOOK = "no_webhook"
 SYNCED = "synced"
 NO_EMAIL = "no_email"
 NOT_CONFIGURED = "not_configured"
+AWAITING_ENRICHMENT = "awaiting_enrichment"
+# Kept from the earlier row when a creator is scored again, unless the new record has them.
+ENRICHMENT_COLUMNS = (
+    "spotify_monthly_listeners",
+    "clay_followers",
+    "roster_size",
+    "self_released",
+    "mastering_credit",
+    "pack_count",
+    "latest_pack_date",
+    "producer_or_engineer",
+    "makes_production_content",
+    "clay_research",
+    "clay_score_version",
+    "email_source",
+    "score_before_enrichment",
+    "enrichment_provider",
+    "enrichment_status",
+    "enrichment_experiment",
+    "enrichment_sent_at",
+    "enrichment_returned_at",
+)
 
 FAILURE_COLUMNS = (
     "name", "website_url", "target_type", "attempts", "last_error", "last_attempt_at", "status",
@@ -176,8 +232,11 @@ class CreatorStore:
             row["webhook_sent_at"] = previous.get("webhook_sent_at") or ""
             row["hubspot_status"] = previous.get("hubspot_status") or ""
             row["hubspot_synced_at"] = previous.get("hubspot_synced_at") or ""
-            for column in ("email", "instagram", "tiktok"):
-                row[column] = row[column] or previous.get(column) or ""
+            for column in ("email", "instagram", "tiktok") + ENRICHMENT_COLUMNS:
+                if row[column] in (None, ""):
+                    row[column] = previous.get(column) or ""
+        if str(row.get("email") or "").strip() and not row.get("email_source"):
+            row["email_source"] = "input"
         self._index(row)
         return row
 
