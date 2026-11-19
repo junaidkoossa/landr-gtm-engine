@@ -8,7 +8,9 @@ import anthropic
 import requests
 from dotenv import load_dotenv
 
+from src import costs
 from src.activate import WEBHOOK_FORMATS, send_to_webhook
+from src.db import sync_quietly
 from src.collect import MissingCredentials, UnsupportedSource, collect_evidence, is_label
 from src.email_finders import EmailFinder, EmailLookupError, lead_domain
 from src.enrichment import (
@@ -325,6 +327,7 @@ def send_to_clay(run: Run, rows: list[dict[str, object]], webhook_url: str | Non
         for row, error in send_to_webhook(rows, webhook_url, "clay"):
             if error is None:
                 row["enrichment_status"], row["enrichment_sent_at"] = AWAITING, now_iso()
+                costs.log_rows("clay", 1, row)
                 sent += 1
             else:
                 row["enrichment_status"] = SEND_FAILED
@@ -336,6 +339,7 @@ def send_to_clay(run: Run, rows: list[dict[str, object]], webhook_url: str | Non
         write_clay_csv(path, rows)
         for row in rows:
             row["enrichment_status"], row["enrichment_sent_at"] = AWAITING, now_iso()
+            costs.log_rows("clay", 1, row)
         sent = len(rows)
         logger.info("Wrote %d leads to %s: upload it to Clay, then import Clay's CSV export "
                     "with --import-clay (CLAY_WEBHOOK_URL is not set)", sent, path)
@@ -368,6 +372,7 @@ def find_emails(run: Run, rows: list[dict[str, object]], finder: EmailFinder) ->
                 break
             continue
         failures_in_a_row = 0
+        costs.log_rows(finder.provider, 1, row)
         row["enrichment_returned_at"] = now_iso()
         if email:
             row["email"], row["email_source"], row["enrichment_status"] = email, finder.provider, ENRICHED
@@ -937,16 +942,27 @@ def main(argv: list[str] | None = None) -> int:
         parser.exit(1, f"error: ACTIVATION_WEBHOOK_FORMAT must be one of {', '.join(WEBHOOK_FORMATS)}\n")
 
     clay_webhook_url = os.getenv("CLAY_WEBHOOK_URL") or None
-    try:
-        if args.enrichment_report:
+    if args.enrichment_report:
+        try:
             print("\n".join(enrichment_report(args.output)))
-        elif args.import_clay:
-            import_clay(args.import_clay, args.rules, args.output, provider=args.provider,
-                        webhook_url=webhook_url, webhook_format=webhook_format, hubspot=hubspot)
+        except (OSError, ValueError) as error:
+            parser.exit(1, f"error: {error}\n")
+        return 0
+    # Every model call and Clay row this run makes is logged to the cost file, and the
+    # SQLite database is updated from the CSV files at the end (even if the run stopped).
+    command = "import_clay" if args.import_clay else "resend_unsent" if args.resend_unsent else "pipeline"
+    run = {"run_id": costs.new_run_id(), "command": command, "started_at": costs.now_iso(),
+           "provider": args.provider or os.getenv("SCORING_PROVIDER") or ""}
+    costs.start_run(args.output, run["run_id"])
+    scored: list = []
+    try:
+        if args.import_clay:
+            scored = import_clay(args.import_clay, args.rules, args.output, provider=args.provider,
+                                 webhook_url=webhook_url, webhook_format=webhook_format, hubspot=hubspot)
         elif args.resend_unsent:
             resend_unsent(args.rules, args.output, webhook_url, webhook_format, hubspot)
         else:
-            run_pipeline(
+            scored = run_pipeline(
                 args.input,
                 args.rules,
                 args.output,
@@ -962,6 +978,9 @@ def main(argv: list[str] | None = None) -> int:
             )
     except (OSError, ValueError, RuntimeError, requests.RequestException, anthropic.APIError) as error:
         parser.exit(1, f"error: {error}\n")
+    finally:
+        costs.finish_run()
+        sync_quietly(args.output, {**run, "leads_scored": len(scored)}, args.rules)
     return 0
 
 

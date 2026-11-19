@@ -5,3 +5,6 @@ __pycache__/
 data/input_creators.local.csv
 data/enriched_creators.csv
 data/enriched_creators.*
+data/gtm.db
+data/outcomes.csv
+data/reports/
