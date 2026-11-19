@@ -103,54 +103,78 @@ latest release date, and the view figures below.
 
 ## Scoring
 
-The score is worked out in code from fixed weights (`scoring` in
-`config/vertical_rules.json`, logic in `src/scoring.py`). Claude then reads the
-evidence and may move the score by at most 1 point, giving a reason
-(`score_adjustment`, `adjustment_reason`), and writes the bottleneck and outreach hook.
-(Scoring can also run on Gemini or on a free local model through Ollama, and the hook
-can be written separately by Claude for top-scored creators only; see "Ollama" below.)
-`score_breakdown` shows where each point came from.
+Every lead gets a score out of 10 for each LANDR product, worked out in code from the
+weights under `products` in `config/vertical_rules.json` (logic in `src/scoring.py`):
 
-The aim is to favour creators who release constantly and are consistently watched.
+| Product | What LANDR sells them | Scored for |
+| --- | --- | --- |
+| Mastering | AI mastering plugin and subscriptions | Creators |
+| Distribution | Release to digital streaming platforms | Creators and labels |
+| Samples supplier | Supply their packs to LANDR Samples, building a catalogue to rival Splice | Creators and labels |
+| Plugins | LANDR's own plugins, for musicians, producers and mixing engineers | Creators |
+
+The lead's `score` is its best product's score (`best_product`), and all four are kept
+(`score_mastering` and so on, with every point in `product_breakdowns`). The model then
+reads the evidence and may move the best score by at most 1 point, giving a reason, and
+names the bottleneck. (Scoring can also run on Gemini or Ollama; see below.) Claude
+writes the outreach hook later, for the best product, once the score is final and only
+for leads scoring 7 or more.
+
+| Mastering | Points |
+| --- | --- |
+| Releases in the last 12 months: 6 / 12 / 24+ | 1 / 2 / 3 |
+| Latest release within 90 / 30 days | 1 / 2 |
+| No mastering credit on their releases (Clay) | 2 |
+| Self-released (Clay, or "self-released" on their page) | 1 |
+| Reach (Spotify listeners or steady views): 10K–1M / over 1M | 2 / 1 |
+
+| Distribution | Points |
+| --- | --- |
+| Self-released | 3 |
+| Links to or names a competitor distributor (DistroKid, TuneCore, CD Baby, Amuse, Ditto...) / none found | 2 / 1 |
+| Releases in the last 12 months: 6 / 12+ | 1 / 2 |
+| Latest release within 30 days | 1 |
+| Spotify monthly listeners: 1K / 10K+ (Clay) | 1 / 2 |
+
+| Samples supplier | Points |
+| --- | --- |
+| Sells sample packs, drum kits, loop kits or presets (page text, or Clay's pack count) | 3 |
+| Packs in catalogue: 10 / 50+ (Clay) | 1 / 2 |
+| New pack within 90 days (Clay) | 2 |
+| Sells direct (a storefront link) | 1 |
+| Followers: 10K / 100K+ | 1 / 2 |
+
+| Plugins | Points |
+| --- | --- |
+| Produces or mixes for others ("mixing engineer", "producer" and so on, or Clay) | 3 |
+| Makes production content: tutorials, beat-making, gear or plugin reviews (or Clay) | 2 |
+| Mentions third-party plugins (VST, Serum, FabFilter, Waves...) | 2 |
+| Releases in the last 12 months: 6 / 12+ | 1 / 2 |
+| Latest release within 30 days | 1 |
+
+These weights are a starting point: they'll be tuned once replies show which signals
+predict interest. Points can be changed, and a signal dropped, in the rules file; change
+`scoring_version` there when you do, as it is stamped on every row.
+
+- **Unknown counts half.** A signal no source could check earns half its points, so a
+  lead is neither buried nor promoted for missing data; the breakdown says "half of N
+  counted". Page phrases are found in `product_signals` (`src/scoring.py` lists them).
+- **Limited data goes to Clay.** When under 60% of the points our own sources can check
+  were checked for the best product (Clay-only signals are left out of that share),
+  `limited_data` says so and the lead is sent to Clay whatever its score.
+- **Labels** get Distribution and Samples supplier scores only; Mastering and Plugins are 0.
+- **The big-act test.** Acts over 1M listeners or views get 1 reach point in Mastering
+  instead of 2, on the theory that they already have an engineer. 10% of them
+  (`BIG_ACT_TEST_SHARE`, picked by a stable hash so a lead stays in or out) get the full
+  2 points and are marked `big_act_test`, so their replies can test the theory.
 
 **Steady views** = median views per release × number of releases with views, over the
-last 12 months, added up per platform. Releases from the last 14 days count as
-releases but not in view figures, as they haven't had time to collect views. The
-median means one breakout video barely moves it:
+last 12 months, added up per platform. Releases from the last 14 days count as releases
+but not in view figures. The median means one breakout video barely moves it.
+`top_video_share` (the biggest release's share of views) is shown to the model too.
 
-| Creator | Releases | Total views | Median per release | Steady views | Base score |
-| --- | --- | --- | --- | --- | --- |
-| A | 300 | ~1M | ~3.3K | ~1M | 6 |
-| B | 150 | ~5M | ~33K | ~5M | 7 |
-| C | 150 | ~5M, 4.9M from one video | ~670 | ~100K | 5 |
-
-(All three: a release every month and 20K subscribers, no storefront.)
-`top_video_share` (the biggest release's share of views) is shown to Claude too.
-
-**Consistency** = months in the last 12 with at least one release.
-
-| Creators (out of 10) | Points |
-| --- | --- |
-| Steady views: 50K / 250K / 1M / 5M+ | 1 / 2 / 3 / 4 |
-| Consistency: share of the last 12 months with a release | up to 3 |
-| Storefront link found | 2 |
-| 10,000+ followers or subscribers | 1 |
-
-| Labels (out of 10) | Points |
-| --- | --- |
-| Consistency: share of the last 12 months with a release | up to 5 |
-| Catalogue size: 10 / 50 / 100 / 250 / 500+ releases | 1 / 2 / 3 / 4 / 5 |
-| Storefront link found | +1 bonus (capped at 10; no store is never a penalty) |
-
-Scores run from 1 to 10. A figure no source had scores 0 for that part and shows as
-"unknown" in the breakdown. Those creators keep their score but get a `limited_data`
-note (for example "no view figures, no dated releases") so they can be looked at
-rather than buried.
-
-Rows scored before weighted scoring keep their old score until they are re-scored
-(after 90 days, or when you run `python -m src.main --rescore-all`, which scores every
-creator in the input again however recently it was scored). The weights and bands can be changed in the rules file;
-each band list needs one number per point.
+Existing rows keep their old score until they are re-scored: run
+`python -m src.main --rescore-all` once after this change.
 
 **For production use**, free databases leave gaps: many beatmakers and sample-pack
 sellers aren't in MusicBrainz or Discogs, and YouTube only covers YouTube. Connecting
@@ -173,12 +197,18 @@ evidence fields (see `src/collect.py`), so it can be added alongside the free on
    - repeated in the input, by URL or name;
    - failed 3 runs in a row (`MAX_ATTEMPTS`).
 3. Collect evidence for the rest from the sources above.
-4. Work out the weighted base score, then have Claude review it (±1 at most) and
-   write a bottleneck and an outreach hook.
+4. Work out the weighted base score, then have the model review it (±1 at most) and
+   name the bottleneck.
 5. Update the output CSV. A re-scored creator's row is replaced, so there is one row
    per creator; rows are never removed.
-6. Send creators scoring at least `activation_min_score` (in the rules file) to
-   `ACTIVATION_WEBHOOK_URL` and to HubSpot, and record the result in each row.
+6. Enrich leads scoring at least `ENRICH_MIN_SCORE` (default 6) with
+   `ENRICHMENT_PROVIDER` (see "Enrichment"). With Clay, those leads wait for
+   `--import-clay`, which scores them again on Clay's data before going on.
+7. Claude writes the outreach hook for leads scoring at least `HOOK_MIN_SCORE` (7)
+   whose score is final.
+8. Send creators scoring at least `activation_min_score` (in the rules file) to
+   `ACTIVATION_WEBHOOK_URL`, and those scoring at least `HUBSPOT_MIN_SCORE` (7) with an
+   email to HubSpot, and record the result in each row.
 
 If a creator's data can't be collected or Claude's reply can't be used, the pipeline
 logs a warning, records it in the failures file and carries on. Problems with the
@@ -199,13 +229,93 @@ All sit next to the output CSV (default `data/`):
 | `enriched_creators.failures.csv` | Creators that failed, with the attempt count and last error. After 3 attempts the status is `skipped`; delete the row, or run with `--retry-failed`, to try again |
 | `enriched_creators.review_matches.csv` | Label-name variant matches to check |
 | `enriched_creators.pending_batches.json` | Batches submitted but not yet collected (only while a run is waiting) |
+| `enriched_creators.to_clay.<date-time>.csv` | Leads to upload to Clay, one file per run that had any (when `CLAY_WEBHOOK_URL` is blank) |
+| `enriched_creators.awaiting_clay.json` | The full evidence of leads waiting for Clay, for their re-score |
+| `enriched_creators.enrichment_report.csv` | One row per enriched lead: score before and after, change, reached 7+, email found |
+| `enriched_creators.enrichment_summary.txt` | The latest enrichment summary (see "Enrichment report") |
 
-### Webhook (Clay)
+### Enrichment
 
-**Status: not active.** Clay webhooks need a paid Growth or Enterprise plan, and we
-aren't paying for one for now. The code is ready: leave `ACTIVATION_WEBHOOK_URL`
-blank until there is a plan, and rows are marked `no_webhook`; once a URL is set,
-`--resend-unsent` sends them.
+Enrichment finds emails, and with Clay extra figures, for leads worth the cost: those
+scoring at least `ENRICH_MIN_SCORE` (default 6). `ENRICHMENT_PROVIDER` picks who does it,
+so a client can use the email finder they already pay for:
+
+| `ENRICHMENT_PROVIDER` | Finds | When | Needs |
+| --- | --- | --- | --- |
+| `clay` (default) | email, Spotify monthly listeners, follower count, roster size, research notes | after you import Clay's CSV export | a Clay table; `CLAY_WEBHOOK_URL` optional |
+| `apollo` | email (People Enrichment by name and domain) | during the run | `APOLLO_API_KEY` |
+| `hunter` | email (Domain Search, most confident address) | during the run | `HUNTER_API_KEY` |
+
+Every lead at or above the cutoff that hasn't been enriched yet is enriched, including
+leads scored in earlier runs. Apollo and Hunter look leads up by the domain of their own
+website or storefront, so leads with only YouTube, Bandcamp or social links are marked
+`no_domain`, and leads that already have an email aren't looked up (`has_email`). They
+only find emails, so the score doesn't change, and hooks and HubSpot follow in the same
+run. Each lookup can use a credit.
+
+**The Clay flow:**
+
+1. `python -m src.main` scores every lead. Leads scoring 6+, and leads with limited data, go to Clay: by POST to
+   `CLAY_WEBHOOK_URL` when it's set (Clay webhooks need a paid plan), otherwise in
+   `data/enriched_creators.to_clay.<date-time>.csv` to upload to a Clay table by hand.
+   They are marked `awaiting_clay`, get no hook yet, and HubSpot shows them as
+   `awaiting_enrichment`.
+2. In Clay, add columns named `email`, `spotify_monthly_listeners`, `followers`,
+   `self_released`, `mastering_credit`, `producer_or_engineer`,
+   `makes_production_content` (yes/no), `pack_count`, `latest_pack_date`, `roster_size`
+   (labels) and `clay_research` (a few lines of research), and keep the
+   link columns (`website_url` and so on) so leads match back. Names are matched
+   ignoring case, spaces and dashes; `Work Email`, `Monthly Listeners`, `Follower Count`,
+   `Roster` and `Research Notes` work too. Numbers like `12.3K` or `1.2M` are fine.
+3. Export the table as CSV and run
+   `python -m src.main --import-clay path/to/export.csv`. Each lead waiting for Clay is
+   scored again with Clay's figures (our own figures win where both exist) and Clay's
+   research in front of the model, then Claude writes hooks for 7+ and leads with 7+
+   and an email go to HubSpot. `score_before_enrichment` keeps the earlier score.
+   Leads not waiting for Clay, or not found, are counted and left alone. If a lead
+   can't be scored, it stays waiting; import the same file again.
+4. **Clay's lead scores.** Clay rescores the enriched list with its built-in lead
+   scoring, one score per product: `clay_score_mastering`, `clay_score_distribution`,
+   `clay_score_samples` and `clay_score_plugins` (`Mastering Score` and so on work too).
+   On import Clay's best score is the final score and names `best_product`: no model
+   call, `scored_by` is `clay`, each scaled onto 1-10 from 0 to `CLAY_SCORE_MAX` (default
+   10; set 100 for a 0-100 score). Add a `clay_score_version` column when you change
+   Clay's formula. A single `clay_score` column counts for the engine's best product.
+   The engine's own product scores, with Clay's figures, stay alongside for comparison.
+   Leads with no Clay score are scored again by the engine as above.
+
+Clay's figures are kept when a lead is scored again later, and an enriched lead isn't
+sent to Clay again. A failed webhook send is marked `send_failed` and sent next run.
+
+**The cutoff experiment.** `python -m src.main --clay-experiment` also sends a random
+20 leads scored exactly 5 (`CLAY_EXPERIMENT_SCORE`, `CLAY_EXPERIMENT_SAMPLE` in
+`src/settings.py`) to Clay. After the import, the report says what share reached 7+: over
+50% means `ENRICH_MIN_SCORE` should go down to 5. With fewer than 20 leads scored 5,
+all of them are sent and the result is marked too small to call.
+
+### Enrichment report
+
+`python -m src.main --enrichment-report` prints the summary (it is also logged at the
+end of every run and import, and saved in `enrichment_summary.txt`):
+
+```text
+Enriched leads: 34. At 7+: 12 before enrichment, 19 after. Emails found by enrichment: 21. Average score change: +0.6.
+Experiment (leads scored 5): 20 enriched, 11 reached 7+ (55%). Verdict: over 50%: lower ENRICH_MIN_SCORE to 5.
+Score spread over 412 scored leads: 7+: 40 (31 with an email); 8+: 15 (12 with an email); 9+: 3 (3 with an email). Waiting for Clay: 0.
+HubSpot (7+ with an email): 9 leads without enrichment, 24 with it.
+```
+
+The score spread is there to pick `HUBSPOT_MIN_SCORE` and `HOOK_MIN_SCORE` (both 7 for
+now) once real runs show how many leads land at each score. "Without enrichment" counts
+leads by their score before enrichment and the emails that came with the input.
+`enrichment_report.csv` has the lead-by-lead detail.
+
+### Webhook (activation)
+
+`ACTIVATION_WEBHOOK_URL` is an optional final delivery (Zapier, Make, your own
+endpoint) for leads scoring at least `activation_min_score`. Leads waiting for Clay are
+held back until their import. It is separate from `CLAY_WEBHOOK_URL`, which sends leads
+*to* Clay for enrichment; don't set both to the same Clay table.
 
 Creators that failed to send are never retried automatically. After reviewing the
 unsent file, retry them in a separate run, which resends rows marked `failed` or
@@ -238,9 +348,11 @@ instead, which works on the free plan:
   contacts per request, within HubSpot's 100 requests per 10 seconds on Free and
   Starter; see [usage limits](https://developers.hubspot.com/docs/developer-tooling/platform/usage-guidelines)).
 - Score, bottleneck, outreach hook, data sources, audience size, releases in the last
-  12 months, latest release date and scored-at go into custom contact properties in a
+  12 months, latest release date, scored-at, Spotify monthly listeners, roster size,
+  score before enrichment and research notes go into custom contact properties in a
   "LANDR GTM engine" group (`landr_fit_score` and so on, listed in `src/hubspot.py`).
-- Only creators scoring at least `activation_min_score` are synced.
+- Only creators scoring at least `HUBSPOT_MIN_SCORE` (default 7) are synced. Leads
+  waiting for Clay are marked `awaiting_enrichment` and synced after the import.
 - A re-scored creator is synced again, so HubSpot always shows the latest score.
 - A creator with no email is kept back as `no_email`. Add the email to the input CSV
   and run the pipeline again: the creator isn't re-scored, but the email is picked up
@@ -306,12 +418,12 @@ model are scoring. It is meant for a handful of creators, not full runs.
   model and project and are shown in [Google AI Studio](https://aistudio.google.com/).
 - The `scored_by` column records which model scored each row.
 
-### Ollama: free local scoring, Claude hooks for top leads
+### Ollama: free local scoring
 
 Scoring is high-volume, mechanical work (a ±1 adjustment, a reason and a bottleneck
 label as JSON), so it can run on a model on your own computer through
 [Ollama](https://ollama.com), free and offline. The outreach hook is the sentence a
-creator actually reads, so with Ollama it is written by Claude, and only for creators
+creator actually reads, so it is written by Claude (see "Outreach hooks"), and only for creators
 worth contacting.
 
 Set `SCORING_PROVIDER=ollama` in `.env` (or pass `--provider ollama`), with the Ollama app
@@ -336,17 +448,17 @@ INFO: Outreach hooks: Claude (claude-sonnet-5-5), only for creators scoring 7 or
   16K-token context (`OLLAMA_NUM_CTX` in `src/settings.py`) so a full page of evidence
   isn't cut off; lower it if your computer runs short of memory.
 
-Who writes the hook is set by `HOOK_PROVIDER`:
+### Outreach hooks
 
-| `HOOK_PROVIDER` | Hook written by | For | Default for |
-| --- | --- | --- | --- |
-| `same` | the scoring model, in the same reply | every creator | Claude, Gemini |
-| `claude` | Claude (`CLAUDE_MODEL`), in a separate call after scoring | creators scoring `HOOK_MIN_SCORE` (default 7) or more | Ollama |
-| `none` | nobody | no one | |
+Whichever model scores, the hook is written by Claude (`CLAUDE_MODEL`) in a separate
+call once the lead's score is final: in the same run with Apollo or Hunter, or after
+`--import-clay` for leads sent to Clay. Only leads scoring `HOOK_MIN_SCORE` (default 7)
+or more get one. `HOOK_PROVIDER=none` turns hooks off (`claude` is the default; the
+older `same` setting now means `claude`).
 
-With `claude`, the scoring model isn't asked for a hook at all, Claude sees the same
-evidence plus the score and bottleneck, and creators below the threshold get an empty
-`custom_hook`. It needs `ANTHROPIC_API_KEY`. If Claude can't write one creator's hook,
+Claude sees the same evidence plus the score and bottleneck, and leads below the
+threshold get an empty `custom_hook`. It needs `ANTHROPIC_API_KEY`, also when Gemini or
+Ollama scores (or set `HOOK_PROVIDER=none`). If Claude can't write one creator's hook,
 the score is still saved with an empty hook and a warning; a Claude account problem (no
 credit, bad key) stops the run as usual. The `hook_by` column records which model wrote
 each hook.
@@ -408,8 +520,8 @@ found, or is older, install a current Python from
 
 Set these in `.env`:
 
-- `ANTHROPIC_API_KEY` (required unless scoring with Gemini, or with Ollama and
-  `HOOK_PROVIDER=none`).
+- `ANTHROPIC_API_KEY` (required unless scoring with Gemini or Ollama and
+  `HOOK_PROVIDER=none`, since Claude writes the hooks).
 - `YOUTUBE_API_KEY` if the input has YouTube channels. In Google Cloud Console,
   enable "YouTube Data API v3" for a project and create an API key.
 - `DISCOGS_TOKEN` to add Discogs for labels: Discogs settings → Developers →
@@ -420,8 +532,12 @@ Set these in `.env`:
 - `SCORING_PROVIDER` (`claude` or `gemini`; blank picks by which key is set), `GEMINI_API_KEY` and
   optionally `GEMINI_MODEL` for Gemini test runs. Create the key at
   [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
-- `SCORING_PROVIDER=ollama`, and optionally `OLLAMA_HOST`, `OLLAMA_MODEL`,
-  `HOOK_PROVIDER` and `HOOK_MIN_SCORE`, to score on this computer (see "Ollama" above).
+- `SCORING_PROVIDER=ollama`, and optionally `OLLAMA_HOST` and `OLLAMA_MODEL`, to score
+  on this computer (see "Ollama" above). `HOOK_PROVIDER` and `HOOK_MIN_SCORE` for hooks.
+- `ENRICHMENT_PROVIDER` (`clay`, `apollo` or `hunter`), `ENRICH_MIN_SCORE` (default 6)
+  and `HUBSPOT_MIN_SCORE` (default 7); `CLAY_WEBHOOK_URL` to send leads to Clay without
+  a CSV (paid Clay plan); `APOLLO_API_KEY` or `HUNTER_API_KEY` for those email finders
+  (see "Enrichment").
 - `INSTAGRAM_ACCESS_TOKEN` and `INSTAGRAM_BUSINESS_ID` for Instagram:
   1. Switch an Instagram account you own to a Business or Creator account and link it
      to a Facebook Page.
@@ -444,8 +560,8 @@ Set these in `.env`:
   Account settings → API keys. Watch the record count in the Bright Data dashboard;
   `TIKTOK_POSTS_MIN_FOLLOWERS` and `TIKTOK_POSTS_PER_PROFILE` in `src/settings.py`
   control how many records a run uses.
-- `ACTIVATION_WEBHOOK_URL` and `ACTIVATION_WEBHOOK_FORMAT` only when a Clay webhook
-  exists (needs a paid Clay plan; not in use for now).
+- `ACTIVATION_WEBHOOK_URL` and `ACTIVATION_WEBHOOK_FORMAT` for an optional final
+  delivery webhook (see "Webhook (activation)").
 - `HUBSPOT_ACCESS_TOKEN` to sync contacts into HubSpot (see "HubSpot contacts").
 
 Run the pipeline from the repository root:
@@ -456,8 +572,11 @@ python -m src.main --scoring batch
 python -m src.main --resend-unsent
 python -m src.main --rescore-all   # score everyone again, e.g. after changing the weights
 python -m src.main --provider gemini   # small test run scored by Gemini
-python -m src.main --provider ollama   # score on this computer; Claude writes top hooks
+python -m src.main --provider ollama   # score on this computer
 python -m src.main --retry-failed      # try creators that failed earlier runs again
+python -m src.main --clay-experiment   # also send 20 leads scored 5 to Clay
+python -m src.main --import-clay data/clay_export.csv   # Clay's results: re-score, hooks, HubSpot
+python -m src.main --enrichment-report # before/after scores, experiment verdict, score spread
 ```
 
 Input, rules, and output paths can be overridden with `--input`, `--rules`,
