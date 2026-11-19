@@ -207,14 +207,31 @@ evidence fields (see `src/collect.py`), so it can be added alongside the free on
    name the bottleneck.
 5. Update the output CSV. A re-scored creator's row is replaced, so there is one row
    per creator; rows are never removed.
-6. Enrich leads scoring at least `ENRICH_MIN_SCORE` (default 6) with
+6. Enrich leads at or above the enrich cutoff (6; see "Cutoffs") with
    `ENRICHMENT_PROVIDER` (see "Enrichment"). With Clay, those leads wait for
    `--import-clay`, which scores them again on Clay's data before going on.
-7. Claude writes the outreach hook for leads scoring at least `HOOK_MIN_SCORE` (7)
-   whose score is final.
+7. Claude writes the outreach hook for leads at or above the hook cutoff (7) whose
+   score is final, and for the exploration sample (see "Fine-tuning from replies").
 8. Send creators scoring at least `activation_min_score` (in the rules file) to
-   `ACTIVATION_WEBHOOK_URL`, and those scoring at least `HUBSPOT_MIN_SCORE` (7) with an
-   email to HubSpot, and record the result in each row.
+   `ACTIVATION_WEBHOOK_URL`, and those at or above the HubSpot cutoff (7) with an email,
+   plus the exploration sample, to HubSpot, and record the result in each row.
+
+### Cutoffs
+
+Creators and labels each have their own three cutoffs, in `config/vertical_rules.json`:
+
+```json
+"cutoffs": {
+  "creator": {"enrich": 6, "hook": 7, "hubspot": 7},
+  "label":   {"enrich": 6, "hook": 7, "hubspot": 7}
+}
+```
+
+`enrich` sends leads to enrichment, `hook` gets them a Claude hook, `hubspot` sends them
+to HubSpot. Both start at the same values; the enrichment report splits its numbers by
+creators and labels so each pair can be set from its own results.
+`ENRICH_MIN_SCORE`, `HOOK_MIN_SCORE` and `HUBSPOT_MIN_SCORE` in `.env` override the
+rules file for both types when set (handy for a one-off run).
 
 If a creator's data can't be collected or Claude's reply can't be used, the pipeline
 logs a warning, records it in the failures file and carries on. Problems with the
@@ -241,12 +258,14 @@ All sit next to the output CSV (default `data/`):
 | `enriched_creators.enrichment_summary.txt` | The latest enrichment summary (see "Enrichment report") |
 | `enriched_creators.costs.csv` | Every model call and Clay row, priced: what each run cost (see "Costs, database and reports") |
 | `gtm.db` | SQLite copy of the above for SQL and pandas reports, updated after every run |
-| `outcomes.csv` | Outreach results you fill in (sent, replied, interested, converted) |
+| `outcomes.csv` | Outreach results (sent, replied, interested, converted, bounced), filled in by you or by `--sync-outcomes` |
+| `enriched_creators.scoring_features.csv` | One row per scoring: the points each signal earned per product, the raw figures and Clay's scores (see "Fine-tuning from replies") |
+| `enriched_creators.fit_report.csv` | The latest `--fit-report` table |
 
 ### Enrichment
 
 Enrichment finds emails, and with Clay extra figures, for leads worth the cost: those
-scoring at least `ENRICH_MIN_SCORE` (default 6). `ENRICHMENT_PROVIDER` picks who does it,
+at or above the enrich cutoff (default 6). `ENRICHMENT_PROVIDER` picks who does it,
 so a client can use the email finder they already pay for:
 
 | `ENRICHMENT_PROVIDER` | Finds | When | Needs |
@@ -299,7 +318,7 @@ sent to Clay again. A failed webhook send is marked `send_failed` and sent next 
 **The cutoff experiment.** `python -m src.main --clay-experiment` also sends a random
 20 leads scored exactly 5 (`CLAY_EXPERIMENT_SCORE`, `CLAY_EXPERIMENT_SAMPLE` in
 `src/settings.py`) to Clay. After the import, the report says what share reached 7+: over
-50% means `ENRICH_MIN_SCORE` should go down to 5. With fewer than 20 leads scored 5,
+50% means the enrich cutoff should go down to 5. With fewer than 20 leads scored 5,
 all of them are sent and the result is marked too small to call.
 
 ### Enrichment report
@@ -308,14 +327,16 @@ all of them are sent and the result is marked too small to call.
 end of every run and import, and saved in `enrichment_summary.txt`):
 
 ```text
-Enriched leads: 34. At 7+: 12 before enrichment, 19 after. Emails found by enrichment: 21. Average score change: +0.6.
-Experiment (leads scored 5): 20 enriched, 11 reached 7+ (55%). Verdict: over 50%: lower ENRICH_MIN_SCORE to 5.
-Score spread over 412 scored leads: 7+: 40 (31 with an email); 8+: 15 (12 with an email); 9+: 3 (3 with an email). Waiting for Clay: 0.
-HubSpot (7+ with an email): 9 leads without enrichment, 24 with it.
+Enriched leads: 34. At the hook cutoff (7+): 12 before enrichment, 19 after. Emails found by enrichment: 21. Average score change: +0.6.
+Experiment (leads scored 5): 20 enriched, 11 reached the hook cutoff (55%; creators 9/16; labels 2/4). Verdict: over 50%: lower the enrich cutoff to 5.
+Score spread over 380 scored creators: 7+: 36 (28 with an email); 8+: 13 (10 with an email); 9+: 3 (3 with an email).
+Score spread over 32 scored labels: 7+: 4 (3 with an email); 8+: 2 (2 with an email); 9+: 0 (0 with an email).
+Waiting for Clay: 0.
+HubSpot (7+ with an email): 9 leads without enrichment, 24 with it. Exploration sample below the cutoff: 11 (creators 10; labels 1).
 ```
 
-The score spread is there to pick `HUBSPOT_MIN_SCORE` and `HOOK_MIN_SCORE` (both 7 for
-now) once real runs show how many leads land at each score. "Without enrichment" counts
+The score spread is there to pick the hook and HubSpot cutoffs (both 7 for now) for
+creators and labels once real runs show how many leads land at each score. "Without enrichment" counts
 leads by their score before enrichment and the emails that came with the input.
 `enrichment_report.csv` has the lead-by-lead detail.
 
@@ -360,8 +381,12 @@ instead, which works on the free plan:
   12 months, latest release date, scored-at, Spotify monthly listeners, roster size,
   score before enrichment and research notes go into custom contact properties in a
   "LANDR GTM engine" group (`landr_fit_score` and so on, listed in `src/hubspot.py`).
-- Only creators scoring at least `HUBSPOT_MIN_SCORE` (default 7) are synced. Leads
-  waiting for Clay are marked `awaiting_enrichment` and synced after the import.
+- Only creators at or above the HubSpot cutoff (default 7) are synced, plus the
+  exploration sample (`landr_exploration` says which group). Leads waiting for Clay are
+  marked `awaiting_enrichment` and synced after the import.
+- `--create-properties` also creates `landr_outcome`, a dropdown (no reply, replied,
+  interested, converted, bounced) for you or a workflow to set once a contact answers;
+  `--sync-outcomes` reads it back (see "Fine-tuning from replies").
 - A re-scored creator is synced again, so HubSpot always shows the latest score.
 - A creator with no email is kept back as `no_email`. Add the email to the input CSV
   and run the pipeline again: the creator isn't re-scored, but the email is picked up
@@ -461,8 +486,8 @@ INFO: Outreach hooks: Claude (claude-sonnet-5-5), only for creators scoring 7 or
 
 Whichever model scores, the hook is written by Claude (`CLAUDE_MODEL`) in a separate
 call once the lead's score is final: in the same run with Apollo or Hunter, or after
-`--import-clay` for leads sent to Clay. Only leads scoring `HOOK_MIN_SCORE` (default 7)
-or more get one. `HOOK_PROVIDER=none` turns hooks off (`claude` is the default; the
+`--import-clay` for leads sent to Clay. Only leads at or above the hook cutoff (default 7)
+get one. `HOOK_PROVIDER=none` turns hooks off (`claude` is the default; the
 older `same` setting now means `claude`).
 
 Claude sees the same evidence plus the score and bottleneck, and leads below the
@@ -545,8 +570,10 @@ Set these in `.env`:
   [aistudio.google.com/apikey](https://aistudio.google.com/apikey).
 - `SCORING_PROVIDER=ollama`, and optionally `OLLAMA_HOST` and `OLLAMA_MODEL`, to score
   on this computer (see "Ollama" above). `HOOK_PROVIDER` and `HOOK_MIN_SCORE` for hooks.
-- `ENRICHMENT_PROVIDER` (`clay`, `apollo` or `hunter`), `ENRICH_MIN_SCORE` (default 6)
-  and `HUBSPOT_MIN_SCORE` (default 7); `CLAY_WEBHOOK_URL` to send leads to Clay without
+- `ENRICHMENT_PROVIDER` (`clay`, `apollo` or `hunter`). `ENRICH_MIN_SCORE`,
+  `HUBSPOT_MIN_SCORE` and `HOOK_MIN_SCORE` override the rules file's cutoffs for creators
+  and labels alike (see "Cutoffs"); `EXPLORE_SHARE` (default 0.05) sizes the exploration
+  sample; `CLAY_WEBHOOK_URL` to send leads to Clay without
   a CSV (paid Clay plan); `APOLLO_API_KEY` or `HUNTER_API_KEY` for those email finders
   (see "Enrichment").
 - `INSTAGRAM_ACCESS_TOKEN` and `INSTAGRAM_BUSINESS_ID` for Instagram:
@@ -669,7 +696,13 @@ Record outreach in `data/outcomes.csv` (copy `data/outcomes.example.csv` to star
 | `channel` | e.g. `email` (the default), `instagram_dm` |
 | `sent_at` | Date sent, `YYYY-MM-DD` (required) |
 | `replied`, `interested`, `converted` | `yes` or blank. Each implies the ones before it |
+| `bounced` | `yes` if the email never arrived; the row is left out of the reports and the fit |
 | `notes` | Anything |
+
+`python -m src.main --sync-outcomes` fills the email rows in from HubSpot's
+`landr_outcome` property: a row with the same email is updated (your notes and other
+channels are kept) and new ones are added. `sent_at` is the contact's last email send
+date in HubSpot. The database is updated straight after.
 
 The file holds names and emails, so it is in `.gitignore` and stays on your computer.
 
@@ -696,6 +729,37 @@ The SQL behind each report is at the top of `src/reports.py`; pandas does the gr
 and the rates. Once outcomes come in, `score_components` joined to `outcomes` shows
 which signals actually predict a reply, which is how the weights in
 `config/vertical_rules.json` can be tuned from real responses.
+
+## Fine-tuning from replies
+
+The product weights in the rules file are starting guesses. Four pieces move them toward
+the signals that actually predict replies:
+
+1. **Outcomes.** Set `landr_outcome` in HubSpot as contacts answer (or fill in
+   `outcomes.csv`), then run `python -m src.main --sync-outcomes`.
+2. **Feature file.** Every scoring adds a row to `scoring_features.csv` with the points
+   each signal earned per product (`points_<product>_<signal>`, half points for an
+   unknown signal), the raw figures, the model's adjustment, Clay's four scores, and
+   the `scoring_version` and `clay_score_version` behind them.
+3. **Exploration sample.** 5% of the leads below the HubSpot cutoff that have an email
+   (`EXPLORE_SHARE`) go to HubSpot anyway, with a hook, marked `below_cutoff` in the
+   `exploration` column, or `spot_check_5` for leads scored 5. The draw is stable per
+   lead (a hash of its link), so the same lead isn't drawn in and out between runs.
+   Without it you would only learn about the leads you already rated highly.
+4. **Fit report.** `python -m src.main --fit-report` compares reply rates (replied,
+   interested or converted; bounces left out) for each best product, score band, lead
+   type, exploration group, big-act test group, scorer (Clay or the engine) and scoring
+   version, and for every product signal it compares the leads where it earned points
+   with the average. It writes `fit_report.csv` and prints the headline rows.
+
+Weights are only suggested once there are 200 contacted leads and 30 replies
+(`FIT_MIN_CONTACTED`, `FIT_MIN_REPLIES` in `src/settings.py`). Then a signal whose
+leads reply at 1.5 times the average or more gets "raise by 1 point", and one at 0.67
+times or less gets "lower by 1 point" (with at least 10 leads on each side). Before
+that, the product and score-band rates are enough to spot something clearly not
+working. Nothing is changed for you: edit the points in `config/vertical_rules.json`,
+raise `scoring_version`, and run `--rescore-all`. The same table shows which signals to
+weight in Clay's lead scoring.
 
 ## Development
 
