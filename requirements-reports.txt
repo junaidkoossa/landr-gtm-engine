@@ -1,0 +1,4 @@
+# Only for the reports (python -m src.reports); the pipeline and the SQLite database
+# (python -m src.db) run without it. pandas 2.x still supports Python 3.10; 3.x needs 3.11+.
+-r requirements.txt
+pandas>=2.2,<3
